@@ -17,7 +17,7 @@ uint8_t *init_memory(int memsize) {
     return ptr;
 }
 
-void free_memory(uint8_t **memory_ptr) {
+void destroy_memory(uint8_t **memory_ptr) {
     free(*memory_ptr);
 }
 
