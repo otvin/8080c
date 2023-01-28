@@ -1,14 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 #include <string.h>
-#include <errno.h>
-
-void handle_error(){
-    perror("Fatal error");
-    exit(EXIT_FAILURE);
-}
-
+#include "disassembler.h"
 
 int parse_opcode(int addr, uint8_t *memory, char *strbuff) {
     int retval = 1;
@@ -796,9 +789,6 @@ int parse_opcode(int addr, uint8_t *memory, char *strbuff) {
     return retval;
 }
 
-
-
-
 void disassemble(int start_addr, int max_addr, int point_addr, uint8_t *memory){
     int cur_addr, res;
     char mnemonic[64];
@@ -828,42 +818,3 @@ void disassemble(int start_addr, int max_addr, int point_addr, uint8_t *memory){
         cur_addr = cur_addr + res;
     }
 }
-
-
-
-void load_rom(char *rom_name, int start_at, int finish_at, uint8_t *memory){
-    FILE *infile;
-    int i;
-    uint8_t byte;
-
-    infile = fopen(rom_name, "r");
-    if (infile == NULL) {
-        handle_error();
-    }
-
-    for(i=start_at; i<=finish_at; i++) {
-        byte = fgetc(infile);
-        memory[i] = byte;
-    }
-
-    fclose(infile);
-}
-
-void load_roms(uint8_t *memory) {
-    int i;
-    load_rom("invaders.h", 0x0000, 0x07FF, memory);
-    load_rom("invaders.g", 0x0800, 0x0FFF, memory);
-    load_rom("invaders.f", 0x1000, 0x17FF, memory);
-    load_rom("invaders.e", 0x1800, 0x1FFF, memory);
-}
-
-void main() {
-    uint8_t memory[0x10000];
-    load_roms(memory);
-    disassemble(0x0, 0x0BF4, -1, memory);
-    disassemble(0x1000, 0x13FD, -1, memory);
-    disassemble(0x1400, 0x19BB, -1, memory);
-    disassemble(0x19D1, 0x1A10, -1, memory);
-    disassemble(0x1A32, 0x1A90, -1, memory);
-}
-
