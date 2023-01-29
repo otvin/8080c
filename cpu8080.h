@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+
+
 typedef struct {
     uint16_t pc;  // program counter
     uint16_t sp;  // stack pointer
@@ -35,8 +37,17 @@ typedef struct {
     bool sign_flag;  // false for plus/positive, true for minus/negative
     bool parity_flag;// Note in i8080 the parity is based on number of bits set.  Odd number of bits = false, even number of bits = true
     bool auxiliary_carry_flag;
+
+    // I want to separate the motherboard from the cpu, but this means that the ways the CPU communicates with the motherboard
+    // have to be referenced somehow.  I could pass the memory and the input/output handlers around but that feels more clunky than
+    // this.
+    bool (*motherboard_input_handler)(uint8_t port, uint8_t *in);
+    bool (*motherboard_output_handler)(uint8_t port, uint8_t out);
+    // It would be very very bad for someone to call free() on the motherboard_memory because that would break the motherboard.
+    uint8_t *motherboard_memory;
 } cpu8080;
 
 void init_cpu8080(cpu8080 *cpu);
+bool cycle_cpu8080(cpu8080 *cpu, int *num_states);
 
 #endif
