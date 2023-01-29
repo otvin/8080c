@@ -48,6 +48,6 @@ typedef struct {
 } cpu8080;
 
 void init_cpu8080(cpu8080 *cpu);
-bool cycle_cpu8080(cpu8080 *cpu, int *num_states);
+bool cycle_cpu8080(cpu8080 *cpu, uint64_t *num_states);
 
 #endif

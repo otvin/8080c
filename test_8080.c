@@ -16,8 +16,8 @@ Virtual computer to run 8080 Emulator tests.  Tests may be found at https://alta
 
 int main(int argc, char *argv[]) {
 
-    uint64_t total_states, total_instructions;
-    int num_states, msec;
+    uint64_t total_states, num_states, total_instructions;
+    double sec;
     bool run, debug_mode = false;
     clock_t start_time, end_time, diff;
 
@@ -59,12 +59,12 @@ int main(int argc, char *argv[]) {
     }
     end_time = clock();
     diff = end_time - start_time;
-    msec = diff * 1000 / CLOCKS_PER_SEC;
+    sec =  ((double)diff) / ((double)CLOCKS_PER_SEC);
 
-    printf("Duration in CPU time: %d.%03d sec\n", msec/1000, msec%1000);
+    printf("Duration in CPU time: %f sec\n", sec);
     printf("Num instructions: %ld\n", total_instructions);
-    if (msec > 0) {
-        printf("Performance: %d states per second\n", num_states / (msec * 1000));
+    if (sec > 0) {
+        printf("Performance: %f states per second\n", ((double)total_states) / sec);
     }
 
     destroy_motherboard(&motherboard);
