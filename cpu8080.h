@@ -5,12 +5,12 @@
 #include <stdbool.h>
 
 typedef struct {
-    uint8_t pc;  // program counter
-    uint8_t sp;  // stack pointer
+    uint16_t pc;  // program counter
+    uint16_t sp;  // stack pointer
     
     /* Used for the debugger to print the stack.  Whenever there is an explicit LD to SP, this value gets updated.  It does not get
        updated on increment/decrement to SP. */
-    uint8_t stack_pointer_start; 
+    uint16_t stack_pointer_start; 
 
     uint8_t a;  // accumulator
     uint8_t b;  // b, c, d, e, h, l are registers
@@ -29,7 +29,7 @@ typedef struct {
     // If the CPU is halted, it will only handle interrupts
     bool halted;
 
-    // Flags are single-bit flip-flops in the 8080, not a register as you see in other emulators.
+    // Flags are single-bit flip-flops in the 8080, not a register.
     bool zero_flag;  // false for not zero, true for zero.
     bool carry_flag; // false for no carry, true for carry.
     bool sign_flag;  // false for plus/positive, true for minus/negative
