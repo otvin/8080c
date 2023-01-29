@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include "disassembler.h"
 
 int parse_opcode(int addr, uint8_t *memory, char *strbuff) {
@@ -789,7 +790,21 @@ int parse_opcode(int addr, uint8_t *memory, char *strbuff) {
     return retval;
 }
 
-void disassemble(int start_addr, int max_addr, int point_addr, uint8_t *memory){
+bool is_in_list(int addr, int *breakpoint_list, int list_size) {
+    int i=0;
+    bool found = false;
+    while (i < list_size && !found) {
+        if (breakpoint_list[i] == addr) {
+            found = true;
+        }
+        else {
+            i++;
+        }
+    }
+    return (found);
+}
+
+void disassemble(int start_addr, int max_addr, int point_addr, int *breakpoint_list, int list_size, uint8_t *memory){
     int cur_addr, res;
     char mnemonic[64];
 
@@ -799,7 +814,14 @@ void disassemble(int start_addr, int max_addr, int point_addr, uint8_t *memory){
             printf("--->");
         }
         res = parse_opcode(cur_addr, memory, mnemonic);
-        printf("\t%04X: ", cur_addr);
+        printf("\t");
+        if (is_in_list(cur_addr, breakpoint_list, list_size)) {
+            printf("*");
+        }
+        else {
+            printf(" ");
+        }
+        printf("%04X: ", cur_addr);
         // display the opcode
         printf("%02X ", memory[cur_addr]);
         if (res > 1) {
