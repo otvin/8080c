@@ -4,6 +4,7 @@
 #define GET_BC (((cpu->b) << 8) | (cpu->c))
 #define GET_DE (((cpu->d) << 8) | (cpu->e))
 #define GET_HL (((cpu->h) << 8) | (cpu->l))
+#define DATA_TO_INT16 ((cpu->motherboard_memory[cpu->pc + 2] << 8) | cpu->motherboard_memory[cpu->pc + 1])
 
 // There are some exceptions, where the number of states will change based on conditions.  Those will be handled in cycle().
 // -1 is used for invalid opcodes.  Using 64-bit ints because they will get added to a 64-bit int and this
@@ -185,7 +186,9 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
     uint16_t pc_increments = 1;  // assume we increment pc by one at the end of the function; instructions may override this.
     uint8_t tmp_d, tmp_e; // used in XCHG
     uint16_t tmp_rp; // used in opcodes like INX, DCX where we operate on a register pair
-
+    uint32_t tmp_32; // used in opcodes like DAD where we operate on two 16-bit numbers and need to see if there is a carry.
+    uint8_t tmp_16; // used in DAA
+    
     opcode = cpu->motherboard_memory[cpu->pc];
     *num_states = states_per_opcode[opcode];
     if ((*num_states) == -1) {
@@ -204,17 +207,28 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             cpu->c = cpu->motherboard_memory[cpu->pc + 1];
             pc_increments = 3;
             break;
-        case 0x02: // STAX
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "STAX (BC)");
+        case 0x02: 
+            // STAX (BC)
+            cpu->motherboard_memory[GET_BC] = cpu->a;
             break;
         case 0x03: // INX
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "INC BC\t; INX rp");
+            // INC BC (INX rp)
+            tmp_rp = GET_BC;
+            tmp_rp++;
+            cpu->b = (tmp_rp & 0xFF00) >> 8;
+            cpu->c = (tmp_rp & 0x00FF);
             break;
-        case 0x04: // INR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "INC B\t; INR r");
+        case 0x04: 
+            // INC B (INR r)
+            cpu->b ++;
+            set_zero_sign_parity_from_byte(cpu, cpu->b);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->b) & 0x0F) == 0);
             break;
-        case 0x05: // DCR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC B\t; DCR r");
+        case 0x05:
+            // DEC B (DCR r)
+            cpu->b --;
+            set_zero_sign_parity_from_byte(cpu, cpu->b);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->b) & 0x0F) != 0x0F);
             break;
         case 0x06: 
             // MVI B, d8  (LD B, d8)
@@ -224,29 +238,51 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
         case 0x07: // RLC
             printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RLC");
             break;
-        case 0x09: // DAD
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "ADD HL, BC\t; DAD rp");
+        case 0x09: 
+            // ADD HL, BC (DAD rp)
+            // Only the carry flag is affected, and then if the 16-bit addition carries out.
+            tmp_32 = (uint32_t)(GET_HL) + (uint32_t)(GET_BC);
+            cpu->carry_flag = (bool)(tmp_32 > 0xFFFF);
+            cpu->h = (uint8_t)((tmp_32 & 0xFF00) >> 8);
+            cpu->l = (uint8_t)(tmp_32 & 0x00FF);
             break;
         case 0x0A: 
             // LDAX (BC)
             cpu->a = cpu->motherboard_memory[GET_BC];
             break;
-        case 0x0B: // DCX
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC BC\t; DCX rp");
+        case 0x0B: 
+            // DEC BC (INX rp)
+            tmp_rp = GET_BC;
+            tmp_rp--;
+            cpu->b = (tmp_rp & 0xFF00) >> 8;
+            cpu->c = (tmp_rp & 0x00FF);
             break;
-        case 0x0C: // INR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "INC C\t; INR r");
+        case 0x0C: 
+            // INC C (INR r)
+            cpu->c ++;
+            set_zero_sign_parity_from_byte(cpu, cpu->c);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->c) & 0x0F) == 0);
             break;
-        case 0x0D: // DCR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC C\t; DCR r");
+        case 0x0D: 
+            // DEC C (DCR r)
+            cpu->c --;
+            set_zero_sign_parity_from_byte(cpu, cpu->c);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->c) & 0x0F) != 0x0F);
             break;
         case 0x0E: 
             // MVI C, d8  (LD C, d8)
             cpu->c = cpu->motherboard_memory[cpu->pc + 1];
             pc_increments = 2;
             break;
-        case 0x0F: // RRC
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RRCA");
+        case 0x0F: 
+            // RRCA (Rotate Right with Carry)
+            // The high order bit and the CY flag are both set to the value shifted out of the low order bit position. 
+            // Only the CY flag is affected.
+            cpu->carry_flag = (bool)(cpu->a & 0x01);
+            cpu->a = cpu->a >> 1;
+            if (cpu->carry_flag) {
+                cpu->a |= 0x80;
+            }
             break;
         case 0x11:
             // LXI DE, data 16
@@ -254,8 +290,9 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             cpu->e = cpu->motherboard_memory[cpu->pc + 1];
             pc_increments = 3;
             break;
-        case 0x12: // STAX
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "STAX (DE)");
+        case 0x12: 
+            // STAX (DE)
+            cpu->motherboard_memory[GET_DE] = cpu->a;
             break;
         case 0x13: 
             // INC DE (INX rp)
@@ -264,11 +301,17 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             cpu->d = (tmp_rp & 0xFF00) >> 8;
             cpu->e = (tmp_rp & 0x00FF);
             break;
-        case 0x14: // INR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "INC D\t; INR r");
+        case 0x14: 
+            // INC D (INR r)
+            cpu->d ++;
+            set_zero_sign_parity_from_byte(cpu, cpu->d);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->d) & 0x0F) == 0);
             break;
-        case 0x15: // DCR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC D\t; DCR r");
+        case 0x15: 
+            // DEC D (DCR r)
+            cpu->d --;
+            set_zero_sign_parity_from_byte(cpu, cpu->d);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->d) & 0x0F) != 0x0F);
             break;
         case 0x16: 
             // MVI D, d8  (LD D, d8)
@@ -278,21 +321,36 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
         case 0x17: // RAL
             printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RAL");
             break;
-        case 0x19: // DAD
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "ADD HL, DE\t; DAD rp");
+        case 0x19: 
+            // ADD HL, DE (DAD rp)
+            // Only the carry flag is affected, and then if the 16-bit addition carries out.
+            tmp_32 = (uint32_t)(GET_HL) + (uint32_t)(GET_DE);
+            cpu->carry_flag = (bool)(tmp_32 > 0xFFFF);
+            cpu->h = (uint8_t)((tmp_32 & 0xFF00) >> 8);
+            cpu->l = (uint8_t)(tmp_32 & 0x00FF);
             break;
         case 0x1A: 
             // LDAX DE
             cpu->a = cpu->motherboard_memory[GET_DE];
             break;
-        case 0x1B: // DCX
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC DE\t; DCX rp");
+        case 0x1B: 
+            // DEC DE (INX rp)
+            tmp_rp = GET_DE;
+            tmp_rp--;
+            cpu->d = (tmp_rp & 0xFF00) >> 8;
+            cpu->e = (tmp_rp & 0x00FF);
             break;
-        case 0x1C: // INR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "INC E\t; INR r");
+        case 0x1C: 
+            // INC E (INR r)
+            cpu->e ++;
+            set_zero_sign_parity_from_byte(cpu, cpu->e);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->e) & 0x0F) == 0);
             break;
-        case 0x1D: // DCR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC E\t; DCR r");
+        case 0x1D: 
+            // DEC E (DCR r)
+            cpu->e --;
+            set_zero_sign_parity_from_byte(cpu, cpu->e);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->e) & 0x0F) != 0x0F);
             break;
         case 0x1E: 
             // MVI E, d8  (LD E, d8)
@@ -308,295 +366,437 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             cpu->l = cpu->motherboard_memory[cpu->pc + 1];
             pc_increments = 3;
             break;
-        case 0x22: // SHLD
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD ($%02X%02X), HL\t; SHLD", memory[addr+2], memory[addr+1]);
-            // retval = 3;
+        case 0x22: 
+            // SHLD addr  (store H and L direct)
+            // The content of register L is moved to teh memory location whose address is specified in byte 2 and
+            // byte 3.  The content of register H is moved to the succeeding memory location.  Flags are not 
+            // affected.
+            cpu->motherboard_memory[DATA_TO_INT16] = cpu->l;
+            cpu->motherboard_memory[DATA_TO_INT16 + 1] = cpu->h;
+            pc_increments = 3;
             break;
-        case 0x23: // INX
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "INC HL\t; INX rp");
+        case 0x23: 
+            // INC HL (INX rp)
+            tmp_rp = GET_HL;
+            tmp_rp++;
+            cpu->h = (tmp_rp & 0xFF00) >> 8;
+            cpu->l = (tmp_rp & 0x00FF);
             break;
-        case 0x24: // INR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "INC H\t; INR r");
+        case 0x24: 
+            // INC H (INR r)
+            cpu->h ++;
+            set_zero_sign_parity_from_byte(cpu, cpu->h);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->h) & 0x0F) == 0);
             break;
-        case 0x25: // DCR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC H\t; DCR r");
+        case 0x25: 
+            // DEC H (DCR r)
+            cpu->h --;
+            set_zero_sign_parity_from_byte(cpu, cpu->h);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->h) & 0x0F) != 0x0F);
             break;
         case 0x26: 
             // MVI H, d8  (LD H, d8)
             cpu->h = cpu->motherboard_memory[cpu->pc + 1];
             pc_increments = 2;
             break;
-        case 0x27: // DAA
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DAA");
+        case 0x27: 
+            // DAA (Decimal adjust accumulator)
+            /* The eight-bit number in the accumulator is adjusted to form two four-bit Binary-Coded-Decimal digits
+               by the following process:
+               1. If the value of the least significant 4 bits of the accumulator is greater than 9 or if the AC flag
+               is set, 6 is added to the accumulator.
+               2. If the value of the most significant 4 bits of the accumulator is now greater than 9, or if the CY
+               flag is set, 6 is added to the most significant 4 bits of the accumulator.
+               NOTE: All flags are affected */
+        
+            // copying the MAME logic
+            tmp_16 = cpu->a;  // TODO could probably use a tmp_8 here but this works for now.
+            if (cpu->auxiliary_carry_flag || ((cpu->a & 0xF) > 0x9)) {
+                tmp_16 = tmp_16 + 0x06;
+            }
+            if (cpu->carry_flag || (cpu->a > 0x99)) {
+                tmp_16 = tmp_16 + 0x60;
+            }
+            cpu->carry_flag = (bool)(cpu->carry_flag || (cpu->a > 0x99));
+            cpu->auxiliary_carry_flag = (bool)((cpu->a | tmp_16) & 0x10);
+            cpu->a = (uint8_t)(tmp_16 & 0xFF);
+            set_zero_sign_parity_from_byte(cpu, cpu->a);
             break;
         case 0x29: // DAD
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "ADD HL, HL\t; DAD rp");
+            // ADD HL, HL (DAD rp)
+            // Only the carry flag is affected, and then if the 16-bit addition carries out.
+            // TODO: This could be made faster by converting this to a shift left by 1 (because HL + HL == 2 * HL == HL << 1)
+            tmp_32 = (uint32_t)(GET_HL) + (uint32_t)(GET_HL);
+            cpu->carry_flag = (bool)(tmp_32 > 0xFFFF);
+            cpu->h = (uint8_t)((tmp_32 & 0xFF00) >> 8);
+            cpu->l = (uint8_t)(tmp_32 & 0x00FF);
             break;
-        case 0x2A: // LHLD
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD HL, ($%02X%02X)\t; LHLD", memory[addr+2], memory[addr+1]);
-            // retval = 3;
+        case 0x2A: 
+            // LHLD addr (load H and L direct)
+            // The content of the memory location is specified in byte 2 and byte 3 of the instruction, is moved to
+            // register L.  The content of the memory location at the succeeding address is moved to register H.
+            // flags are not affected.
+            cpu->l = cpu->motherboard_memory[DATA_TO_INT16];
+            cpu->h = cpu->motherboard_memory[DATA_TO_INT16 + 1];
+            pc_increments = 3;
             break;
-        case 0x2B: // DCX
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC HL\t; DCX rp");
+        case 0x2B: 
+            // DEC HL (INX rp)
+            tmp_rp = GET_HL;
+            tmp_rp--;
+            cpu->h = (tmp_rp & 0xFF00) >> 8;
+            cpu->l = (tmp_rp & 0x00FF);
             break;
-        case 0x2C: // INR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "INC L\t; INR r");
+        case 0x2C: 
+            // INC L (INR r)
+            cpu->l ++;
+            set_zero_sign_parity_from_byte(cpu, cpu->l);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->l) & 0x0F) == 0);
             break;
-        case 0x2D: // DCR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC L\t; DCR r");
+        case 0x2D:
+            // DEC L (DCR r)
+            cpu->l --;
+            set_zero_sign_parity_from_byte(cpu, cpu->l);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->l) & 0x0F) != 0x0F);
             break;
         case 0x2E: 
             // MVI L, d8  (LD L, d8)
             cpu->l = cpu->motherboard_memory[cpu->pc + 1];
             pc_increments = 2;
             break;
-        case 0x2F: // CMA
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "CMA");
+        case 0x2F: 
+            // CMA (complement accumulator)
+            cpu->a = ~(cpu->a);
             break;
         case 0x31:
             // LXI SP, data 16
-            cpu->sp = (cpu->motherboard_memory[cpu->pc + 2] << 8) | cpu->motherboard_memory[cpu->pc + 1];
+            cpu->sp = DATA_TO_INT16;
             cpu->stack_pointer_start = cpu->sp;
             pc_increments = 3;
             break;
-        case 0x32: // STA
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD ($%02X%02X), A\t; STA", memory[addr+2], memory[addr+1]);
-            // retval = 3;
+        case 0x32: 
+            // STA data 16 (store accumulator direct)
+            cpu->motherboard_memory[DATA_TO_INT16] = cpu->a;
+            pc_increments = 3;
             break;
-        case 0x33: // INX
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "INC SP\t; INX rp");
+        case 0x33: 
+            // INC SP (INX rp)
+            cpu->sp ++;
             break;
-        case 0x34: // INR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "INC (HL)\t; INR M");
+        case 0x34:
+            // INC (HL)  (INR M)
+            cpu->motherboard_memory[GET_HL]++;
+            set_zero_sign_parity_from_byte(cpu, cpu->motherboard_memory[GET_HL]);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->motherboard_memory[GET_HL]) & 0x0F) == 0);
             break;
-        case 0x35: // DCR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC (HL)\t; DCR M");
+        case 0x35:
+            // DEC (HL)  (DCR M)
+            cpu->motherboard_memory[GET_HL]--;
+            set_zero_sign_parity_from_byte(cpu, cpu->motherboard_memory[GET_HL]);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->motherboard_memory[GET_HL]) & 0x0F) != 0x0F);
             break;
         case 0x36: 
             // MVI M, data (a.k.a. LD (HL), data)
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD (HL), $%02X\t;MVI M, data", memory[addr+1]);
-            /*
             cpu->motherboard_memory[GET_HL] = cpu->motherboard_memory[cpu->pc + 1];
-            */
+            pc_increments = 2;
             break;
-        case 0x37: // STC
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "STC");
+        case 0x37: 
+            // STC (set carry)
+            cpu->carry_flag = true;
             break;
-        case 0x39: // DAD
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "ADD HL, SP\t; DAD rp");
+        case 0x39:
+            // ADD HL, SP (DAD rp)
+            // Only the carry flag is affected, and then if the 16-bit addition carries out.
+            tmp_32 = (uint32_t)(GET_HL) + (uint32_t)(cpu->sp);
+            cpu->carry_flag = (bool)(tmp_32 > 0xFFFF);
+            cpu->h = (uint8_t)((tmp_32 & 0xFF00) >> 8);
+            cpu->l = (uint8_t)(tmp_32 & 0x00FF);
             break;
-        case 0x3A: // LDA
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD A, ($%02X%02X)\t; LDA", memory[addr+2], memory[addr+1]);
-            // retval = 3;
+        case 0x3A: 
+            // LDA data 16 (load accumulator direct)
+            cpu->a = cpu->motherboard_memory[DATA_TO_INT16];
+            pc_increments = 3;
             break;
-        case 0x3B: // DCX
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC SP\t; DCX rp");
+        case 0x3B: 
+            // DEC SP (DCX rp)
+            cpu->sp --;
             break;
-        case 0x3C: // INR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "INC A\t; INR r");
+        case 0x3C: 
+            // INC A (INR r)
+            cpu->a ++;
+            set_zero_sign_parity_from_byte(cpu, cpu->a);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->a) & 0x0F) == 0);
             break;
-        case 0x3D: // DCR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DEC A\t; DCR r");
+        case 0x3D: 
+            // DEC A (DCR r)
+            cpu->a --;
+            set_zero_sign_parity_from_byte(cpu, cpu->a);
+            cpu->auxiliary_carry_flag = (bool)(((cpu->a) & 0x0F) != 0x0F);
             break;
         case 0x3E:
             // MVI A, d8  (LD A, d8)
             cpu->a = cpu->motherboard_memory[cpu->pc + 1];
             pc_increments = 2;
             break;
-        case 0x3F: // CMC
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "CMC");
+        case 0x3F: 
+            // CMC (complement carry flag)
+            cpu->carry_flag = !(cpu->carry_flag);
             break;
-        case 0x40: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD B, B\t; MOV r1, r2");
+        case 0x40: 
+            // LD B, B (MOV r1, r2)
+            cpu->b = cpu->b;
             break;
-        case 0x41: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD B, C\t; MOV r1, r2");
+        case 0x41: 
+            // LD B, C (MOV r1, r2)
+            cpu->b = cpu->c;
             break;
-        case 0x42: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD B, D\t; MOV r1, r2");
+        case 0x42:
+            // LD B, D (MOV r1, r2)
+            cpu->b = cpu->d;
             break;
-        case 0x43: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD B, E\t; MOV r1, r2");
+        case 0x43:
+            // LD B, E (MOV r1, r2)
+            cpu->b = cpu->e;
             break;
-        case 0x44: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD B, H\t; MOV r1, r2");
+        case 0x44:
+            // LD B, H (MOV r1, r2)
+            cpu->b = cpu->h;
             break;
-        case 0x45: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD B, L\t; MOV r1, r2");
+        case 0x45:
+            // LD B, L (MOV r1, r2)
+            cpu->b = cpu->l;
             break;
-        case 0x46: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD B, (HL)\t; MOV r, M");
+        case 0x46:
+            // LD B, (HL) (MOV r, M)
+            cpu->b = cpu->motherboard_memory[GET_HL];
             break;
-        case 0x47: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD B, A\t; MOV r1, r2");
+        case 0x47: 
+            // LD B, A (MOV r1, r2)
+            cpu->b = cpu->a;
             break;
-        case 0x48: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD C, B\t; MOV r1, r2");
+        case 0x48: 
+            // LD C, B (MOV r1, r2)
+            cpu->c= cpu->b;
             break;
-        case 0x49: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD C, C\t; MOV r1, r2");
+        case 0x49: 
+            // LD C, C (MOV r1, r2)
+            cpu->c= cpu->c;
             break;
-        case 0x4A: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD C, D\t; MOV r1, r2");
+        case 0x4A: 
+            // LD C, D (MOV r1, r2)
+            cpu->c= cpu->d;
             break;
-        case 0x4B: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD C, E\t; MOV r1, r2");
+        case 0x4B: 
+            // LD C, E (MOV r1, r2)
+            cpu->c= cpu->e;
             break;
-        case 0x4C: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD C, H\t; MOV r1, r2");
+        case 0x4C: 
+            // LD C, H (MOV r1, r2)
+            cpu->c= cpu->h;
             break;
-        case 0x4D: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD C, L\t; MOV r1, r2");
+        case 0x4D:
+            // LD C, L (MOV r1, r2)
+            cpu->c= cpu->l;
             break;
-        case 0x4E: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD C, (HL)\t; MOV r, M");
+        case 0x4E: 
+            // LD C, (HL) (MOV r, M)
+            cpu->c= cpu->motherboard_memory[GET_HL];
             break;
-        case 0x4F: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD C, A\t; MOV r1, r2");
+        case 0x4F: 
+            // LD C, A (MOV r1, r2)
+            cpu->c= cpu->a;
             break;
-        case 0x50: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD D, B\t; MOV r1, r2");
+        case 0x50: 
+            // LD D, B (MOV r1, r2)
+            cpu->d= cpu->b;
             break;
-        case 0x51: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD D, C\t; MOV r1, r2");
+        case 0x51: 
+            // LD D, C (MOV r1, r2)
+            cpu->d= cpu->c;
             break;
-        case 0x52: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD D, D\t; MOV r1, r2");
+        case 0x52: 
+            // LD D, D (MOV r1, r2)
+            cpu->d= cpu->d;
             break;
-        case 0x53: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD D, E\t; MOV r1, r2");
+        case 0x53: 
+            // LD D, E (MOV r1, r2)
+            cpu->d= cpu->e;
             break;
-        case 0x54: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD D, H\t; MOV r1, r2");
+        case 0x54: 
+            // LD D, H (MOV r1, r2)
+            cpu->d= cpu->h;
             break;
-        case 0x55: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD D, L\t; MOV r1, r2");
+        case 0x55: 
+            // LD D, L (MOV r1, r2)
+            cpu->d= cpu->l;
             break;
-        case 0x56: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD D, (HL)\t; MOV r, M");
+        case 0x56: 
+            // LD D, (HL) (MOV r, M)
+            cpu->d= cpu->motherboard_memory[GET_HL];
             break;
-        case 0x57: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD D, A\t; MOV r1, r2");
+        case 0x57: 
+            // LD D, A (MOV r1, r2)
+            cpu->d= cpu->a;
             break;
-        case 0x58: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD E, B\t; MOV r1, r2");
+        case 0x58: 
+            // LD E, B (MOV r1, r2)
+            cpu->e= cpu->b;
             break;
-        case 0x59: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD E, C\t; MOV r1, r2");
+        case 0x59: 
+            // LD E, C (MOV r1, r2)
+            cpu->e= cpu->c;
             break;
-        case 0x5A: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD E, D\t; MOV r1, r2");
+        case 0x5A: 
+            // LD E, D (MOV r1, r2)
+            cpu->e= cpu->d;
             break;
-        case 0x5B: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD E, E\t; MOV r1, r2");
+        case 0x5B: 
+           // LD E, E (MOV r1, r2)
+            cpu->e= cpu->e;
             break;
-        case 0x5C: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD E, H\t; MOV r1, r2");
+        case 0x5C: 
+            // LD E, H (MOV r1, r2)
+            cpu->e= cpu->h;
             break;
-        case 0x5D: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD E, L\t; MOV r1, r2");
+        case 0x5D: 
+            // LD E, L (MOV r1, r2)
+            cpu->e= cpu->l;
             break;
-        case 0x5E: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD E, (HL)\t; MOV r, M");
+        case 0x5E:
+            // LD E, (HL) (MOV r, M)
+            cpu->e= cpu->motherboard_memory[GET_HL];
             break;
-        case 0x5F: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD E, A\t; MOV r1, r2");
+        case 0x5F:
+            // LD E, A (MOV r1, r2)
+            cpu->e= cpu->a;
             break;
-        case 0x60: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD H, B\t; MOV r1, r2");
+        case 0x60:
+            // LD H, B (MOV r1, r2)
+            cpu->h= cpu->b;
             break;
-        case 0x61: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD H, C\t; MOV r1, r2");
+        case 0x61:
+            // LD H, C (MOV r1, r2)
+            cpu->h= cpu->c;
             break;
-        case 0x62: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD H, D\t; MOV r1, r2");
+        case 0x62:
+            // LD H, D (MOV r1, r2)
+            cpu->h= cpu->d;
             break;
-        case 0x63: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD H, E\t; MOV r1, r2");
+        case 0x63:
+            // LD H, E (MOV r1, r2)
+            cpu->h= cpu->e;
             break;
-        case 0x64: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD H, H\t; MOV r1, r2");
+        case 0x64:
+            // LD H, H (MOV r1, r2)
+            cpu->h= cpu->h;
             break;
-        case 0x65: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD H, L\t; MOV r1, r2");
+        case 0x65:
+            // LD H, L (MOV r1, r2)
+            cpu->h= cpu->l;
             break;
-        case 0x66: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD H, (HL)\t; MOV r, M");
+        case 0x66:
+            // LD H, (HL) (MOV r, M)
+            cpu->h= cpu->motherboard_memory[GET_HL];
             break;
-        case 0x67: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD H, A\t; MOV r1, r2");
+        case 0x67:
+            // LD H, A (MOV r1, r2)
+            cpu->h= cpu->a;
             break;
-        case 0x68: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD L, B\t; MOV r1, r2");
+        case 0x68: 
+            // LD L, B (MOV r1, r2)
+            cpu->l= cpu->b;
             break;
-        case 0x69: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD L, C\t; MOV r1, r2");
+        case 0x69: 
+            // LD L, C (MOV r1, r2)
+            cpu->l= cpu->c;
             break;
-        case 0x6A: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD L, D\t; MOV r1, r2");
+        case 0x6A: 
+            // LD L, D (MOV r1, r2)
+            cpu->l= cpu->d;
             break;
-        case 0x6B: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD L, E\t; MOV r1, r2");
+        case 0x6B: 
+            // LD L, E (MOV r1, r2)
+            cpu->l= cpu->e;
             break;
-        case 0x6C: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD L, H\t; MOV r1, r2");
+        case 0x6C: 
+            // LD L, H (MOV r1, r2)
+            cpu->l= cpu->h;
             break;
-        case 0x6D: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD L, L\t; MOV r1, r2");
+        case 0x6D: 
+            // LD L, L (MOV r1, r2)
+            cpu->l= cpu->l;
             break;
-        case 0x6E: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD L, (HL)\t; MOV r, M");
+        case 0x6E: 
+            // LD L, (HL) (MOV r, M)
+            cpu->l= cpu->motherboard_memory[GET_HL];
             break;
-        case 0x6F: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD L, A\t; MOV r1, r2");
+        case 0x6F: 
+            // LD L, A (MOV r1, r2)
+            cpu->l= cpu->a;
             break;
-        case 0x70: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD (HL), B\t; MOV M, r");
+        case 0x70: 
+            // LD (HL), B  (MOV M, r)
+            cpu->motherboard_memory[GET_HL] = cpu->b;
             break;
-        case 0x71: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD (HL), C\t; MOV M, r");
+        case 0x71: 
+            // LD (HL), C  (MOV M, r)
+            cpu->motherboard_memory[GET_HL] = cpu->c;
             break;
-        case 0x72: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD (HL), D\t; MOV M, r");
+        case 0x72: 
+            // LD (HL), D  (MOV M, r)
+            cpu->motherboard_memory[GET_HL] = cpu->d;
             break;
-        case 0x73: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD (HL), E\t; MOV M, r");
+        case 0x73:
+            // LD (HL), E  (MOV M, r)
+            cpu->motherboard_memory[GET_HL] = cpu->e;
             break;
-        case 0x74: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD (HL), H\t; MOV M, r");
+        case 0x74: 
+            // LD (HL), H  (MOV M, r)
+            cpu->motherboard_memory[GET_HL] = cpu->h;
             break;
-        case 0x75: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD (HL), L\t; MOV M, r");
+        case 0x75: 
+            // LD (HL), L  (MOV M, r)
+            cpu->motherboard_memory[GET_HL] = cpu->l;
             break;
-        case 0x76: // HLT
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "HLT");
+        case 0x76: 
+            // HLT
+            cpu->halted = true;
             break;
-        case 0x77: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD (HL), A\t; MOV M, r");
+        case 0x77: 
+            // LD (HL), A  (MOV M, r)
+            cpu->motherboard_memory[GET_HL] = cpu->a;
             break;
-        case 0x78: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD A, B\t; MOV r1, r2");
+        case 0x78: 
+            // LD A, B (MOV r1, r2)
+            cpu->a= cpu->b;
             break;
         case 0x79: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD A, C\t; MOV r1, r2");
+            // LD A, C (MOV r1, r2)
+            cpu->a= cpu->c;
             break;
         case 0x7A: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD A, D\t; MOV r1, r2");
+            // LD A, D (MOV r1, r2)
+            cpu->a= cpu->d;
             break;
         case 0x7B: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD A, E\t; MOV r1, r2");
+            // LD A, E (MOV r1, r2)
+            cpu->a= cpu->e;
             break;
         case 0x7C: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD A, H\t; MOV r1, r2");
+            // LD A, H (MOV r1, r2)
+            cpu->a= cpu->h;
             break;
         case 0x7D: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD A, L\t; MOV r1, r2");
+            // LD A, L (MOV r1, r2)
+            cpu->a= cpu->l;
             break;
         case 0x7E: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD A, (HL)\t; MOV r, M");
+            // LD A, (HL) (MOV r, M)
+            cpu->a= cpu->motherboard_memory[GET_HL];
             break;
         case 0x7F: // MOV
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "LD A, A\t; MOV r1, r2");
+            // LD A, A (MOV r1, r2)
+            cpu->a= cpu->a;
             break;
         case 0x80: 
             // ADD A, B
