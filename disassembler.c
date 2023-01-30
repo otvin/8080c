@@ -807,8 +807,35 @@ bool is_in_list(int addr, int *breakpoint_list, int list_size) {
 void disassemble(int start_addr, int max_addr, int point_addr, int *breakpoint_list, int list_size, uint8_t *memory){
     int cur_addr, res;
     char mnemonic[64];
+    int real_start_addr;
+    bool found;
 
-    cur_addr = start_addr;
+    /*
+    There is an issue where if the start address points to a valid opcode, but that address is actually a second
+    or third byte of a multi-byte opcode or is data, then the actual address of the point_addr may get skipped,
+    leading to a very confusing view.  So we should start at either start_addr, start_addr + 1, or start_addr + 2, whichever
+    has the point_addr be selected.  But only do this if the point_addr is in a range from start_addr to mix_addr.
+    */
+   real_start_addr = start_addr;
+   if ((point_addr >= (start_addr + 2)) && point_addr <= max_addr) {
+        
+        found = false;
+        while(!found && real_start_addr < point_addr) {
+            cur_addr = real_start_addr;
+            while (cur_addr <= point_addr) {
+                res = parse_opcode(cur_addr, memory, mnemonic);
+                cur_addr = cur_addr + res;
+                if (cur_addr == point_addr) {
+                    found = true;
+                }
+            }
+            if (!found) {
+                real_start_addr ++;
+            }
+        }
+    }
+
+    cur_addr = real_start_addr;
     while (cur_addr <= max_addr){
         if (cur_addr == point_addr) {
             printf("--->");
