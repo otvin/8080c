@@ -87,6 +87,15 @@ void set_flags_from_byte(cpu8080 *cpu, uint8_t byte) {
     cpu->carry_flag = (bool) (byte & 0x01);
 }
 
+static inline void do_interrupt(cpu8080 *cpu, uint8_t interrupt, uint16_t *pc_increments) {
+    cpu->motherboard_memory[cpu->sp - 1] = ((cpu->pc + 3) >> 8);
+    cpu->motherboard_memory[cpu->sp - 2] = ((cpu->pc + 3) & 0xFF);
+    cpu->sp = cpu ->sp - 2;
+    // pc gets set to 8 * the interrupt number, which is interrupt << 3.
+    cpu->pc = (interrupt << 3);
+    (*pc_increments) = 0;
+}
+
 static inline void do_conditional_call(cpu8080 *cpu, bool flag, uint64_t *num_states, uint16_t *pc_increments) {
     if (flag) {
         cpu->motherboard_memory[cpu->sp - 1] = ((cpu->pc + 3) >> 8);
@@ -185,9 +194,11 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
     uint8_t opcode;
     uint16_t pc_increments = 1;  // assume we increment pc by one at the end of the function; instructions may override this.
     uint8_t tmp_d, tmp_e; // used in XCHG
+    uint8_t tmp_h, tmp_l; // used in XTHL
     uint16_t tmp_rp; // used in opcodes like INX, DCX where we operate on a register pair
     uint32_t tmp_32; // used in opcodes like DAD where we operate on two 16-bit numbers and need to see if there is a carry.
     uint8_t tmp_16; // used in DAA
+    bool tmp_bool; // used in RAL/RAR
     
     opcode = cpu->motherboard_memory[cpu->pc];
     *num_states = states_per_opcode[opcode];
@@ -235,8 +246,15 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             cpu->b = cpu->motherboard_memory[cpu->pc + 1];
             pc_increments = 2;
             break;
-        case 0x07: // RLC
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RLC");
+        case 0x07: 
+            // RLC (Rotate Left with Carry)
+            // The content of the accumulator is rotated left one position.  The low order bit and the CY flag are both set
+            // to the value shifted out of the high order bit position.
+            cpu->carry_flag = (bool)(cpu->a & 0x80);
+            cpu->a = cpu->a << 1;
+            if (cpu->carry_flag) {
+                cpu->a = cpu->a | 0x01;
+            }
             break;
         case 0x09: 
             // ADD HL, BC (DAD rp)
@@ -319,7 +337,16 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             pc_increments = 2;
             break;
         case 0x17: // RAL
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RAL");
+            // RAL (Rotate Accumulator Left through carry)
+            // The content of the accumulator is rotated left one position.  The low order bit is set
+            // equal to the CY flag and the CY flag is set to the value shifted out of the high order 
+            // bit position.
+            tmp_bool = cpu->carry_flag;
+            cpu->carry_flag = (bool)(cpu->a & 0x80);
+            cpu->a = cpu->a << 1;
+            if(tmp_bool) {
+                cpu->a = cpu->a | 0x01;
+            }
             break;
         case 0x19: 
             // ADD HL, DE (DAD rp)
@@ -357,8 +384,16 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             cpu->e = cpu->motherboard_memory[cpu->pc + 1];
             pc_increments = 2;
             break;
-        case 0x1F: // RAR
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RAR");
+        case 0x1F: 
+            // RAR - Rotate right through carry
+            // The content of the accumulator is rotated right one position.  The high-order bit is set
+            // to the CY flag and the CY flag is set to the value shifted out of the low order bit position.
+            tmp_bool = cpu->carry_flag;
+            cpu->carry_flag = (bool)(cpu->a & 0x01);
+            cpu->a = cpu->a >> 1;
+            if (tmp_bool) {
+                cpu->a = cpu->a | 0x80;
+            }
             break;
         case 0x21: 
             // LXI HL, data 16
@@ -1081,13 +1116,15 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             cpu->motherboard_memory[cpu->sp - 1] = cpu->b;
             cpu->motherboard_memory[cpu->sp - 2] = cpu->c;
             cpu->sp = cpu->sp - 2;
+            break;
         case 0xC6: 
             // ADI d8
             do_addition(cpu, cpu->motherboard_memory[cpu->pc + 1], false);
             pc_increments = 2;
             break;
-        case 0xC7: // RST
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RST 000");
+        case 0xC7: 
+            // RST 0
+            do_interrupt(cpu, 0, &pc_increments);
             break;
         case 0xC8: 
             // RET Z
@@ -1119,8 +1156,9 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             do_addition(cpu, cpu->motherboard_memory[cpu->pc + 1], cpu->carry_flag);
             pc_increments = 2;
             break;
-        case 0xCF: // RST
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RST 001");
+        case 0xCF: 
+            // RST 1
+            do_interrupt(cpu, 1, &pc_increments);
             break;
         case 0xD0: 
             // RET NC
@@ -1138,7 +1176,9 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0xD3: 
             // OUT port, A
-            cpu->motherboard_output_handler(cpu->motherboard_memory[cpu->pc + 1], cpu->a);
+            if (!cpu->motherboard_output_handler(cpu->motherboard_memory[cpu->pc + 1], cpu->a)) {
+                return false;
+            }
             pc_increments = 2;
             break;
         case 0xD4: 
@@ -1156,8 +1196,9 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             do_subtraction(cpu, cpu->motherboard_memory[cpu->pc + 1], false, true);
             pc_increments = 2;
             break;
-        case 0xD7: // RST
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RST 002");
+        case 0xD7: 
+            // RST 2
+            do_interrupt(cpu, 2, &pc_increments);
             break;
         case 0xD8: 
             // RET C
@@ -1167,9 +1208,12 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             // JMP C
             do_conditional_jump(cpu, cpu->carry_flag, &pc_increments);
             break;
-        case 0xDB: // IN
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "IN A, (INP %02X)", memory[addr+1]);
-            // retval = 2;
+        case 0xDB: 
+            // IN A port
+            if (!cpu->motherboard_input_handler(cpu->motherboard_memory[cpu->pc + 1], &(cpu->a))) {
+                return false;
+            }
+            pc_increments = 2;
             break;
         case 0xDC: 
             // CALL C addr
@@ -1180,8 +1224,9 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             do_subtraction(cpu, cpu->motherboard_memory[cpu->pc + 1], cpu->carry_flag, true);
             pc_increments = 2;
             break;
-        case 0xDF: // RST
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RST 003");
+        case 0xDF: 
+            // RST 3
+            do_interrupt(cpu, 3, &pc_increments);
             break;
         case 0xE0: 
             // RET PO
@@ -1197,8 +1242,15 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             // JMP PO
             do_conditional_jump(cpu, !(cpu->parity_flag), &pc_increments);
             break;
-        case 0xE3: // XTHL
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "XTHL");
+        case 0xE3: 
+            // XTHL
+            // Exchange stack top with H and L.
+            tmp_h = cpu->h;
+            tmp_l = cpu->l;
+            cpu->h = cpu->motherboard_memory[cpu->sp + 1];
+            cpu->l = cpu->motherboard_memory[cpu->sp];
+            cpu->motherboard_memory[cpu->sp] = tmp_l;
+            cpu->motherboard_memory[cpu->sp + 1] = tmp_h;
             break;
         case 0xE4: 
             // CALL PO addr
@@ -1209,20 +1261,24 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             cpu->motherboard_memory[cpu->sp - 1] = cpu->h;
             cpu->motherboard_memory[cpu->sp - 2] = cpu->l;
             cpu->sp = cpu->sp - 2;
+            break;
         case 0xE6: 
             // AND data (ANI data)
             do_and(cpu, cpu->motherboard_memory[cpu->pc + 1]);
             pc_increments = 2;
             break;
-        case 0xE7: // RST
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RST 004");
+        case 0xE7: 
+            // RST 4
+            do_interrupt(cpu, 4, &pc_increments);
             break;
         case 0xE8: 
             // RET PE
             do_conditional_return(cpu, cpu->parity_flag, num_states, &pc_increments);
             break;
-        case 0xE9: // PCHL
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "PCHL");
+        case 0xE9: 
+            // PCHL - Jump to (HL) indirect 
+            cpu->pc = GET_HL;
+            pc_increments = 0;
             break;
         case 0xEA:
             // JMP PE
@@ -1246,8 +1302,9 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             do_xor(cpu, cpu->motherboard_memory[cpu->pc + 1]);
             pc_increments = 2;
             break;
-        case 0xEF: // RST
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RST 005");
+        case 0xEF: 
+            // RST 5
+            do_interrupt(cpu, 5, &pc_increments);
             break;
         case 0xF0: 
             // RET P
@@ -1264,7 +1321,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             do_conditional_jump(cpu, !(cpu->sign_flag), &pc_increments);
             break;
         case 0xF3: // DI
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "DI");
+            cpu->interrupts_enabled = false;
             break;
         case 0xF4: 
             // CALL P addr
@@ -1275,27 +1332,31 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             cpu->motherboard_memory[cpu->sp - 1] = cpu->a;
             cpu->motherboard_memory[cpu->sp - 2] = get_byte_from_flags(cpu);
             cpu->sp = cpu->sp - 2;
+            break;
         case 0xF6: 
             // OR data (ORI data)
             do_or(cpu, cpu->motherboard_memory[cpu->pc + 1]);
             pc_increments = 2;
             break;
-        case 0xF7: // RST
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RST 006");
+        case 0xF7: 
+            // RST 6
+            do_interrupt(cpu, 6, &pc_increments);
             break;
         case 0xF8: 
             // RET M
             do_conditional_return(cpu, cpu->sign_flag, num_states, &pc_increments);
             break;
-        case 0xF9: // SPHL
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "SPHL");
+        case 0xF9: 
+            // SPHL
+            cpu->sp = GET_HL;
             break;
         case 0xFA:
             // JMP M
             do_conditional_jump(cpu, cpu->sign_flag, &pc_increments);
             break;
-        case 0xFB: // EI
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "EI");
+        case 0xFB: 
+            // EI
+            cpu->enable_interrupts_after_next_instruction = true;
             break;
         case 0xFC: 
             // CALL M addr
@@ -1306,8 +1367,9 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             do_subtraction(cpu, cpu->motherboard_memory[cpu->pc + 1], false, false);
             pc_increments = 2;
             break;
-        case 0xFF: // RST
-            printf("ERROR: Opcode %02X not implemented\n", opcode); return (false); //(strbuff, "RST 007");
+        case 0xFF: 
+            // RST 7
+            do_interrupt(cpu, 7, &pc_increments);
             break;
         default:  // 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0xCB, 0xD9, 0xDD, 0xED, 0xFD
             printf("ERROR: Opcode %02X not valid\n", opcode); return (false); //(strbuff, "??");

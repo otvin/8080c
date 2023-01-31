@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <sys/time.h>
 #include <stdbool.h>
 #include "memory.h"
 #include "disassembler.h"
@@ -20,6 +21,8 @@ int main(int argc, char *argv[]) {
     double sec;
     bool run, debug_mode = false;
     clock_t start_time, end_time, diff;
+    struct timeval start_time1, end_time1;
+    double sec1;
 
     if (argc > 1) {
         if (strncmp(argv[1], "-debug", 6) == 0) {
@@ -40,6 +43,7 @@ int main(int argc, char *argv[]) {
     load_rom("TST8080.COM", 0x100, motherboard.memory);
 
     start_time = clock();
+    gettimeofday(&start_time1, NULL);
     run = true;
 
     if (debug_mode) {
@@ -58,13 +62,19 @@ int main(int argc, char *argv[]) {
         }
     }
     end_time = clock();
+    gettimeofday(&end_time1, NULL);
     diff = end_time - start_time;
     sec =  ((double)diff) / ((double)CLOCKS_PER_SEC);
+    sec1 = ((double)(end_time1.tv_usec - start_time1.tv_usec) / 1000000) + ((double)(end_time1.tv_sec - start_time1.tv_sec));
 
     printf("Duration in CPU time: %f sec\n", sec);
+    printf("Duration in clock time: %f sec\n", sec1);
     printf("Num instructions: %ld\n", total_instructions);
     if (sec > 0) {
-        printf("Performance: %f states per second\n", ((double)total_states) / sec);
+        printf("Performance: %f states per CPU second\n", ((double)total_states) / sec);
+    }
+    if (sec1 > 0) {
+        printf("Performance: %f states per clock second\n", ((double)total_states) / sec1);
     }
 
     destroy_motherboard(&motherboard);
