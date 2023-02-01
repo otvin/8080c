@@ -35,7 +35,8 @@ void init_test_motherboard(motherboard8080 *motherboard) {
     motherboard->cpu.motherboard_input_handler = &handle_test_input;
     motherboard->cpu.motherboard_output_handler = &handle_test_output;
     motherboard->cpu.pc = 0x100; // all the test ROMs begin execution at 0x100.
-    
+    motherboard->cpu.sp = 0xFF00;  // from a random website that talked about how to emulate CP/M; none of the test ROMs go this high.
+    motherboard->cpu.stack_pointer_start = 0xFF00;
 }
 
 void destroy_motherboard(motherboard8080 *motherboard) {

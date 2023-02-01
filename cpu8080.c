@@ -4,7 +4,7 @@
 #define GET_BC (((cpu->b) << 8) | (cpu->c))
 #define GET_DE (((cpu->d) << 8) | (cpu->e))
 #define GET_HL (((cpu->h) << 8) | (cpu->l))
-#define DATA_TO_INT16 ((cpu->motherboard_memory[cpu->pc + 2] << 8) | cpu->motherboard_memory[cpu->pc + 1])
+#define TWO_INSTR_TO_INT16 ((cpu->motherboard_memory[cpu->pc + 2] << 8) | cpu->motherboard_memory[cpu->pc + 1])
 
 // There are some exceptions, where the number of states will change based on conditions.  Those will be handled in cycle().
 // -1 is used for invalid opcodes.  Using 64-bit ints because they will get added to a 64-bit int and this
@@ -197,7 +197,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
     uint8_t tmp_h, tmp_l; // used in XTHL
     uint16_t tmp_rp; // used in opcodes like INX, DCX where we operate on a register pair
     uint32_t tmp_32; // used in opcodes like DAD where we operate on two 16-bit numbers and need to see if there is a carry.
-    uint8_t tmp_16; // used in DAA
+    uint8_t tmp_8; // used in DAA
     bool tmp_bool; // used in RAL/RAR
     
     opcode = cpu->motherboard_memory[cpu->pc];
@@ -406,8 +406,8 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             // The content of register L is moved to teh memory location whose address is specified in byte 2 and
             // byte 3.  The content of register H is moved to the succeeding memory location.  Flags are not 
             // affected.
-            cpu->motherboard_memory[DATA_TO_INT16] = cpu->l;
-            cpu->motherboard_memory[DATA_TO_INT16 + 1] = cpu->h;
+            cpu->motherboard_memory[TWO_INSTR_TO_INT16] = cpu->l;
+            cpu->motherboard_memory[TWO_INSTR_TO_INT16 + 1] = cpu->h;
             pc_increments = 3;
             break;
         case 0x23: 
@@ -445,16 +445,16 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
                NOTE: All flags are affected */
         
             // copying the MAME logic
-            tmp_16 = cpu->a;  // TODO could probably use a tmp_8 here but this works for now.
+            tmp_8 = cpu->a;
             if (cpu->auxiliary_carry_flag || ((cpu->a & 0xF) > 0x9)) {
-                tmp_16 = tmp_16 + 0x06;
+                tmp_8 = tmp_8 + 0x06;
             }
             if (cpu->carry_flag || (cpu->a > 0x99)) {
-                tmp_16 = tmp_16 + 0x60;
+                tmp_8 = tmp_8 + 0x60;
             }
             cpu->carry_flag = (bool)(cpu->carry_flag || (cpu->a > 0x99));
-            cpu->auxiliary_carry_flag = (bool)((cpu->a | tmp_16) & 0x10);
-            cpu->a = (uint8_t)(tmp_16 & 0xFF);
+            cpu->auxiliary_carry_flag = (bool)((cpu->a ^ tmp_8) & 0x10);
+            cpu->a = (uint8_t)(tmp_8 & 0xFF);
             set_zero_sign_parity_from_byte(cpu, cpu->a);
             break;
         case 0x29: // DAD
@@ -471,8 +471,8 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             // The content of the memory location is specified in byte 2 and byte 3 of the instruction, is moved to
             // register L.  The content of the memory location at the succeeding address is moved to register H.
             // flags are not affected.
-            cpu->l = cpu->motherboard_memory[DATA_TO_INT16];
-            cpu->h = cpu->motherboard_memory[DATA_TO_INT16 + 1];
+            cpu->l = cpu->motherboard_memory[TWO_INSTR_TO_INT16];
+            cpu->h = cpu->motherboard_memory[TWO_INSTR_TO_INT16 + 1];
             pc_increments = 3;
             break;
         case 0x2B: 
@@ -505,13 +505,13 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x31:
             // LXI SP, data 16
-            cpu->sp = DATA_TO_INT16;
+            cpu->sp = TWO_INSTR_TO_INT16;
             cpu->stack_pointer_start = cpu->sp;
             pc_increments = 3;
             break;
         case 0x32: 
             // STA data 16 (store accumulator direct)
-            cpu->motherboard_memory[DATA_TO_INT16] = cpu->a;
+            cpu->motherboard_memory[TWO_INSTR_TO_INT16] = cpu->a;
             pc_increments = 3;
             break;
         case 0x33: 
@@ -549,7 +549,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x3A: 
             // LDA data 16 (load accumulator direct)
-            cpu->a = cpu->motherboard_memory[DATA_TO_INT16];
+            cpu->a = cpu->motherboard_memory[TWO_INSTR_TO_INT16];
             pc_increments = 3;
             break;
         case 0x3B: 

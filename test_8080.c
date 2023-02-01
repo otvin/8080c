@@ -40,8 +40,11 @@ int main(int argc, char *argv[]) {
     load_cpm_shim(motherboard.memory);
 
     // all test ROMs are loaded starting 0x100.  
-    load_rom("TST8080.COM", 0x100, motherboard.memory);
-
+    // load_rom("TST8080.COM", 0x100, motherboard.memory);
+    // load_rom("8080PRE.COM", 0x100, motherboard.memory);
+    // load_rom("CPUTEST.COM", 0x100, motherboard.memory);
+    load_rom("8080EXM.COM", 0x100, motherboard.memory);
+    
     start_time = clock();
     gettimeofday(&start_time1, NULL);
     run = true;
