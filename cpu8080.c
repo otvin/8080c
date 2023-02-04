@@ -4,7 +4,7 @@
 #define GET_BC (((cpu->b) << 8) | (cpu->c))
 #define GET_DE (((cpu->d) << 8) | (cpu->e))
 #define GET_HL (((cpu->h) << 8) | (cpu->l))
-#define TWO_INSTR_TO_INT16 ((cpu->motherboard_memory[cpu->pc + 2] << 8) | cpu->motherboard_memory[cpu->pc + 1])
+#define TWO_INSTR_TO_INT16 ((motherboard->memory[cpu->pc + 2] << 8) | motherboard->memory[cpu->pc + 1])
 
 // There are some exceptions, where the number of states will change based on conditions.  Those will be handled in cycle().
 // -1 is used for invalid opcodes.  Using 64-bit ints because they will get added to a 64-bit int and this
@@ -46,10 +46,13 @@ void init_cpu8080(cpu8080 *cpu) {
     cpu->carry_flag = false;
     cpu->sign_flag = false;
     cpu->auxiliary_carry_flag = false;
+}
 
-    cpu->motherboard_memory = NULL;
-    cpu->motherboard_input_handler = NULL;
-    cpu->motherboard_output_handler = NULL;
+void init_test_cpu8080(cpu8080 *cpu) {
+    init_cpu8080(cpu);
+    cpu->pc = 0x100; // all the test ROMs begin execution at 0x100.
+    cpu->sp = 0xFF00;  // from a random website that talked about how to emulate CP/M; none of the test ROMs go this high.
+    cpu->stack_pointer_start = 0xFF00;
 }
 
 void set_zero_sign_parity_from_byte(cpu8080 *cpu, uint8_t byte) {
@@ -87,21 +90,21 @@ void set_flags_from_byte(cpu8080 *cpu, uint8_t byte) {
     cpu->carry_flag = (bool) (byte & 0x01);
 }
 
-static inline void do_interrupt(cpu8080 *cpu, uint8_t interrupt, uint16_t *pc_increments) {
-    cpu->motherboard_memory[cpu->sp - 1] = ((cpu->pc + 3) >> 8);
-    cpu->motherboard_memory[cpu->sp - 2] = ((cpu->pc + 3) & 0xFF);
+static inline void do_interrupt(motherboard8080 *motherboard, cpu8080 *cpu, uint8_t interrupt, uint16_t *pc_increments) {
+    motherboard->memory[cpu->sp - 1] = ((cpu->pc + 3) >> 8);
+    motherboard->memory[cpu->sp - 2] = ((cpu->pc + 3) & 0xFF);
     cpu->sp = cpu ->sp - 2;
     // pc gets set to 8 * the interrupt number, which is interrupt << 3.
     cpu->pc = (interrupt << 3);
     (*pc_increments) = 0;
 }
 
-static inline void do_conditional_call(cpu8080 *cpu, bool flag, uint64_t *num_states, uint16_t *pc_increments) {
+static inline void do_conditional_call(motherboard8080 *motherboard, cpu8080 *cpu, bool flag, uint64_t *num_states, uint16_t *pc_increments) {
     if (flag) {
-        cpu->motherboard_memory[cpu->sp - 1] = ((cpu->pc + 3) >> 8);
-        cpu->motherboard_memory[cpu->sp - 2] = ((cpu->pc + 3) & 0xFF);
+        motherboard->memory[cpu->sp - 1] = ((cpu->pc + 3) >> 8);
+        motherboard->memory[cpu->sp - 2] = ((cpu->pc + 3) & 0xFF);
         cpu->sp = cpu ->sp - 2;
-        cpu->pc = (cpu->motherboard_memory[cpu->pc+2] << 8) | cpu->motherboard_memory[cpu->pc+1];
+        cpu->pc = (motherboard->memory[cpu->pc+2] << 8) | motherboard->memory[cpu->pc+1];
         (*pc_increments) = 0;
         (*num_states) = 17;
     }
@@ -110,9 +113,9 @@ static inline void do_conditional_call(cpu8080 *cpu, bool flag, uint64_t *num_st
     }
 }
 
-static inline void do_conditional_jump(cpu8080 *cpu, bool flag, uint16_t *pc_increments) {
+static inline void do_conditional_jump(motherboard8080 *motherboard, cpu8080 *cpu, bool flag, uint16_t *pc_increments) {
     if (flag) {
-        cpu->pc = (cpu->motherboard_memory[cpu->pc+2] << 8) | cpu->motherboard_memory[cpu->pc+1];
+        cpu->pc = (motherboard->memory[cpu->pc+2] << 8) | motherboard->memory[cpu->pc+1];
         (*pc_increments) = 0;
     }
     else {
@@ -120,9 +123,9 @@ static inline void do_conditional_jump(cpu8080 *cpu, bool flag, uint16_t *pc_inc
     }
 }
 
-static inline void do_conditional_return(cpu8080 *cpu, bool flag, uint64_t *num_states, uint16_t *pc_increments){
+static inline void do_conditional_return(motherboard8080 *motherboard, cpu8080 *cpu, bool flag, uint64_t *num_states, uint16_t *pc_increments){
     if (flag) {
-        cpu->pc = (cpu->motherboard_memory[cpu->sp +1] << 8) | cpu->motherboard_memory[cpu->sp];
+        cpu->pc = (motherboard->memory[cpu->sp +1] << 8) | motherboard->memory[cpu->sp];
         cpu->sp = cpu->sp + 2;
         (*pc_increments) = 0;
         (*num_states) = 11;
@@ -190,7 +193,7 @@ static inline void do_xor(cpu8080 *cpu, uint8_t byte) {
     set_zero_sign_parity_from_byte(cpu, cpu->a);
 }
 
-bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
+bool do_opcode(motherboard8080 *motherboard, cpu8080 *cpu, uint64_t *num_states) {
     uint8_t opcode;
     uint16_t pc_increments = 1;  // assume we increment pc by one at the end of the function; instructions may override this.
     uint8_t tmp_d, tmp_e; // used in XCHG
@@ -200,7 +203,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
     uint8_t tmp_8; // used in DAA
     bool tmp_bool; // used in RAL/RAR
     
-    opcode = cpu->motherboard_memory[cpu->pc];
+    opcode = motherboard->memory[cpu->pc];
     *num_states = states_per_opcode[opcode];
     if ((*num_states) == -1) {
         printf("Invalid Opcode %02X\n", opcode);
@@ -214,13 +217,13 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x01:
             // LXI BC, data 16
-            cpu->b = cpu->motherboard_memory[cpu->pc + 2];
-            cpu->c = cpu->motherboard_memory[cpu->pc + 1];
+            cpu->b = motherboard->memory[cpu->pc + 2];
+            cpu->c = motherboard->memory[cpu->pc + 1];
             pc_increments = 3;
             break;
         case 0x02: 
             // STAX (BC)
-            cpu->motherboard_memory[GET_BC] = cpu->a;
+            motherboard->memory[GET_BC] = cpu->a;
             break;
         case 0x03: // INX
             // INC BC (INX rp)
@@ -243,7 +246,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x06: 
             // MVI B, d8  (LD B, d8)
-            cpu->b = cpu->motherboard_memory[cpu->pc + 1];
+            cpu->b = motherboard->memory[cpu->pc + 1];
             pc_increments = 2;
             break;
         case 0x07: 
@@ -266,7 +269,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x0A: 
             // LDAX (BC)
-            cpu->a = cpu->motherboard_memory[GET_BC];
+            cpu->a = motherboard->memory[GET_BC];
             break;
         case 0x0B: 
             // DEC BC (INX rp)
@@ -289,7 +292,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x0E: 
             // MVI C, d8  (LD C, d8)
-            cpu->c = cpu->motherboard_memory[cpu->pc + 1];
+            cpu->c = motherboard->memory[cpu->pc + 1];
             pc_increments = 2;
             break;
         case 0x0F: 
@@ -304,13 +307,13 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x11:
             // LXI DE, data 16
-            cpu->d = cpu->motherboard_memory[cpu->pc + 2];
-            cpu->e = cpu->motherboard_memory[cpu->pc + 1];
+            cpu->d = motherboard->memory[cpu->pc + 2];
+            cpu->e = motherboard->memory[cpu->pc + 1];
             pc_increments = 3;
             break;
         case 0x12: 
             // STAX (DE)
-            cpu->motherboard_memory[GET_DE] = cpu->a;
+            motherboard->memory[GET_DE] = cpu->a;
             break;
         case 0x13: 
             // INC DE (INX rp)
@@ -333,7 +336,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x16: 
             // MVI D, d8  (LD D, d8)
-            cpu->d = cpu->motherboard_memory[cpu->pc + 1];
+            cpu->d = motherboard->memory[cpu->pc + 1];
             pc_increments = 2;
             break;
         case 0x17: // RAL
@@ -358,7 +361,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x1A: 
             // LDAX DE
-            cpu->a = cpu->motherboard_memory[GET_DE];
+            cpu->a = motherboard->memory[GET_DE];
             break;
         case 0x1B: 
             // DEC DE (INX rp)
@@ -381,7 +384,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x1E: 
             // MVI E, d8  (LD E, d8)
-            cpu->e = cpu->motherboard_memory[cpu->pc + 1];
+            cpu->e = motherboard->memory[cpu->pc + 1];
             pc_increments = 2;
             break;
         case 0x1F: 
@@ -397,8 +400,8 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x21: 
             // LXI HL, data 16
-            cpu->h = cpu->motherboard_memory[cpu->pc + 2];
-            cpu->l = cpu->motherboard_memory[cpu->pc + 1];
+            cpu->h = motherboard->memory[cpu->pc + 2];
+            cpu->l = motherboard->memory[cpu->pc + 1];
             pc_increments = 3;
             break;
         case 0x22: 
@@ -406,8 +409,8 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             // The content of register L is moved to teh memory location whose address is specified in byte 2 and
             // byte 3.  The content of register H is moved to the succeeding memory location.  Flags are not 
             // affected.
-            cpu->motherboard_memory[TWO_INSTR_TO_INT16] = cpu->l;
-            cpu->motherboard_memory[TWO_INSTR_TO_INT16 + 1] = cpu->h;
+            motherboard->memory[TWO_INSTR_TO_INT16] = cpu->l;
+            motherboard->memory[TWO_INSTR_TO_INT16 + 1] = cpu->h;
             pc_increments = 3;
             break;
         case 0x23: 
@@ -431,7 +434,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x26: 
             // MVI H, d8  (LD H, d8)
-            cpu->h = cpu->motherboard_memory[cpu->pc + 1];
+            cpu->h = motherboard->memory[cpu->pc + 1];
             pc_increments = 2;
             break;
         case 0x27: 
@@ -471,8 +474,8 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             // The content of the memory location is specified in byte 2 and byte 3 of the instruction, is moved to
             // register L.  The content of the memory location at the succeeding address is moved to register H.
             // flags are not affected.
-            cpu->l = cpu->motherboard_memory[TWO_INSTR_TO_INT16];
-            cpu->h = cpu->motherboard_memory[TWO_INSTR_TO_INT16 + 1];
+            cpu->l = motherboard->memory[TWO_INSTR_TO_INT16];
+            cpu->h = motherboard->memory[TWO_INSTR_TO_INT16 + 1];
             pc_increments = 3;
             break;
         case 0x2B: 
@@ -496,7 +499,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x2E: 
             // MVI L, d8  (LD L, d8)
-            cpu->l = cpu->motherboard_memory[cpu->pc + 1];
+            cpu->l = motherboard->memory[cpu->pc + 1];
             pc_increments = 2;
             break;
         case 0x2F: 
@@ -511,7 +514,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x32: 
             // STA data 16 (store accumulator direct)
-            cpu->motherboard_memory[TWO_INSTR_TO_INT16] = cpu->a;
+            motherboard->memory[TWO_INSTR_TO_INT16] = cpu->a;
             pc_increments = 3;
             break;
         case 0x33: 
@@ -520,19 +523,19 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x34:
             // INC (HL)  (INR M)
-            cpu->motherboard_memory[GET_HL]++;
-            set_zero_sign_parity_from_byte(cpu, cpu->motherboard_memory[GET_HL]);
-            cpu->auxiliary_carry_flag = (bool)(((cpu->motherboard_memory[GET_HL]) & 0x0F) == 0);
+            motherboard->memory[GET_HL]++;
+            set_zero_sign_parity_from_byte(cpu, motherboard->memory[GET_HL]);
+            cpu->auxiliary_carry_flag = (bool)(((motherboard->memory[GET_HL]) & 0x0F) == 0);
             break;
         case 0x35:
             // DEC (HL)  (DCR M)
-            cpu->motherboard_memory[GET_HL]--;
-            set_zero_sign_parity_from_byte(cpu, cpu->motherboard_memory[GET_HL]);
-            cpu->auxiliary_carry_flag = (bool)(((cpu->motherboard_memory[GET_HL]) & 0x0F) != 0x0F);
+            motherboard->memory[GET_HL]--;
+            set_zero_sign_parity_from_byte(cpu, motherboard->memory[GET_HL]);
+            cpu->auxiliary_carry_flag = (bool)(((motherboard->memory[GET_HL]) & 0x0F) != 0x0F);
             break;
         case 0x36: 
             // MVI M, data (a.k.a. LD (HL), data)
-            cpu->motherboard_memory[GET_HL] = cpu->motherboard_memory[cpu->pc + 1];
+            motherboard->memory[GET_HL] = motherboard->memory[cpu->pc + 1];
             pc_increments = 2;
             break;
         case 0x37: 
@@ -549,7 +552,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x3A: 
             // LDA data 16 (load accumulator direct)
-            cpu->a = cpu->motherboard_memory[TWO_INSTR_TO_INT16];
+            cpu->a = motherboard->memory[TWO_INSTR_TO_INT16];
             pc_increments = 3;
             break;
         case 0x3B: 
@@ -570,7 +573,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x3E:
             // MVI A, d8  (LD A, d8)
-            cpu->a = cpu->motherboard_memory[cpu->pc + 1];
+            cpu->a = motherboard->memory[cpu->pc + 1];
             pc_increments = 2;
             break;
         case 0x3F: 
@@ -603,7 +606,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x46:
             // LD B, (HL) (MOV r, M)
-            cpu->b = cpu->motherboard_memory[GET_HL];
+            cpu->b = motherboard->memory[GET_HL];
             break;
         case 0x47: 
             // LD B, A (MOV r1, r2)
@@ -635,7 +638,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x4E: 
             // LD C, (HL) (MOV r, M)
-            cpu->c= cpu->motherboard_memory[GET_HL];
+            cpu->c= motherboard->memory[GET_HL];
             break;
         case 0x4F: 
             // LD C, A (MOV r1, r2)
@@ -667,7 +670,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x56: 
             // LD D, (HL) (MOV r, M)
-            cpu->d= cpu->motherboard_memory[GET_HL];
+            cpu->d= motherboard->memory[GET_HL];
             break;
         case 0x57: 
             // LD D, A (MOV r1, r2)
@@ -699,7 +702,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x5E:
             // LD E, (HL) (MOV r, M)
-            cpu->e= cpu->motherboard_memory[GET_HL];
+            cpu->e= motherboard->memory[GET_HL];
             break;
         case 0x5F:
             // LD E, A (MOV r1, r2)
@@ -731,7 +734,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x66:
             // LD H, (HL) (MOV r, M)
-            cpu->h= cpu->motherboard_memory[GET_HL];
+            cpu->h= motherboard->memory[GET_HL];
             break;
         case 0x67:
             // LD H, A (MOV r1, r2)
@@ -763,7 +766,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x6E: 
             // LD L, (HL) (MOV r, M)
-            cpu->l= cpu->motherboard_memory[GET_HL];
+            cpu->l= motherboard->memory[GET_HL];
             break;
         case 0x6F: 
             // LD L, A (MOV r1, r2)
@@ -771,27 +774,27 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x70: 
             // LD (HL), B  (MOV M, r)
-            cpu->motherboard_memory[GET_HL] = cpu->b;
+            motherboard->memory[GET_HL] = cpu->b;
             break;
         case 0x71: 
             // LD (HL), C  (MOV M, r)
-            cpu->motherboard_memory[GET_HL] = cpu->c;
+            motherboard->memory[GET_HL] = cpu->c;
             break;
         case 0x72: 
             // LD (HL), D  (MOV M, r)
-            cpu->motherboard_memory[GET_HL] = cpu->d;
+            motherboard->memory[GET_HL] = cpu->d;
             break;
         case 0x73:
             // LD (HL), E  (MOV M, r)
-            cpu->motherboard_memory[GET_HL] = cpu->e;
+            motherboard->memory[GET_HL] = cpu->e;
             break;
         case 0x74: 
             // LD (HL), H  (MOV M, r)
-            cpu->motherboard_memory[GET_HL] = cpu->h;
+            motherboard->memory[GET_HL] = cpu->h;
             break;
         case 0x75: 
             // LD (HL), L  (MOV M, r)
-            cpu->motherboard_memory[GET_HL] = cpu->l;
+            motherboard->memory[GET_HL] = cpu->l;
             break;
         case 0x76: 
             // HLT
@@ -799,7 +802,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x77: 
             // LD (HL), A  (MOV M, r)
-            cpu->motherboard_memory[GET_HL] = cpu->a;
+            motherboard->memory[GET_HL] = cpu->a;
             break;
         case 0x78: 
             // LD A, B (MOV r1, r2)
@@ -827,7 +830,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x7E: // MOV
             // LD A, (HL) (MOV r, M)
-            cpu->a= cpu->motherboard_memory[GET_HL];
+            cpu->a= motherboard->memory[GET_HL];
             break;
         case 0x7F: // MOV
             // LD A, A (MOV r1, r2)
@@ -859,7 +862,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x86: 
             // ADD, (HL))
-            do_addition(cpu, cpu->motherboard_memory[GET_HL], false);
+            do_addition(cpu, motherboard->memory[GET_HL], false);
             break;
         case 0x87: 
             // ADD, A
@@ -891,7 +894,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x8E: 
             // ADC, (HL))
-            do_addition(cpu, cpu->motherboard_memory[GET_HL], cpu->carry_flag);
+            do_addition(cpu, motherboard->memory[GET_HL], cpu->carry_flag);
             break;
         case 0x8F: 
             // ADC A, A
@@ -923,7 +926,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x96: 
             //SUB A, (HL)
-            do_subtraction(cpu, cpu->motherboard_memory[GET_HL], false, true);
+            do_subtraction(cpu, motherboard->memory[GET_HL], false, true);
             break;
         case 0x97: 
             //SUB A, A
@@ -955,7 +958,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0x9E: 
             // SBB A, (HL)
-            do_subtraction(cpu, cpu->motherboard_memory[GET_HL], cpu->carry_flag, true);
+            do_subtraction(cpu, motherboard->memory[GET_HL], cpu->carry_flag, true);
             break;
         case 0x9F: 
             // SBB A, A
@@ -987,7 +990,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0xA6:
             // AND (HL) (ANA M)
-            do_and(cpu, cpu->motherboard_memory[GET_HL]);
+            do_and(cpu, motherboard->memory[GET_HL]);
             break; 
         case 0xA7: 
             // AND A (ANA r)
@@ -1019,7 +1022,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0xAE: 
             // XOR (HL) (XRA M)
-            do_xor(cpu, cpu->motherboard_memory[GET_HL]);
+            do_xor(cpu, motherboard->memory[GET_HL]);
             break;
         case 0xAF: 
             // XOR A (XRA r)
@@ -1051,7 +1054,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0xB6: 
             // OR (HL) (ORA M)
-            do_or(cpu, cpu->motherboard_memory[GET_HL]); 
+            do_or(cpu, motherboard->memory[GET_HL]); 
             break;
         case 0xB7: 
             // OR A (ORA r)
@@ -1083,7 +1086,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0xBE: 
             // CMP M (CMP (HL))
-            do_subtraction(cpu, cpu->motherboard_memory[GET_HL], false, false);
+            do_subtraction(cpu, motherboard->memory[GET_HL], false, false);
             break;
         case 0xBF: 
             // CMP A
@@ -1091,48 +1094,48 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0xC0: 
             // RET NZ
-            do_conditional_return(cpu, !(cpu->zero_flag), num_states, &pc_increments);
+            do_conditional_return(motherboard, cpu, !(cpu->zero_flag), num_states, &pc_increments);
             break;
         case 0xC1: // POP
             // POP BC
-            cpu->b = cpu->motherboard_memory[cpu->sp + 1];
-            cpu->c = cpu->motherboard_memory[cpu->sp];
+            cpu->b = motherboard->memory[cpu->sp + 1];
+            cpu->c = motherboard->memory[cpu->sp];
             cpu->sp = cpu->sp + 2;
             break;
         case 0xC2: 
             // JMP NZ
-            do_conditional_jump(cpu, !(cpu->zero_flag), &pc_increments);
+            do_conditional_jump(motherboard, cpu, !(cpu->zero_flag), &pc_increments);
             break;
         case 0xC3: // JMP
-            cpu->pc = (cpu->motherboard_memory[cpu->pc+2] << 8) | cpu->motherboard_memory[cpu->pc+1];
+            cpu->pc = (motherboard->memory[cpu->pc+2] << 8) | motherboard->memory[cpu->pc+1];
             pc_increments = 0;
             break;
         case 0xC4:
             // CALL NZ addr
-            do_conditional_call(cpu, !(cpu->zero_flag), num_states, &pc_increments);
+            do_conditional_call(motherboard, cpu, !(cpu->zero_flag), num_states, &pc_increments);
             break;
         case 0xC5:
             // PUSH BC
-            cpu->motherboard_memory[cpu->sp - 1] = cpu->b;
-            cpu->motherboard_memory[cpu->sp - 2] = cpu->c;
+            motherboard->memory[cpu->sp - 1] = cpu->b;
+            motherboard->memory[cpu->sp - 2] = cpu->c;
             cpu->sp = cpu->sp - 2;
             break;
         case 0xC6: 
             // ADI d8
-            do_addition(cpu, cpu->motherboard_memory[cpu->pc + 1], false);
+            do_addition(cpu, motherboard->memory[cpu->pc + 1], false);
             pc_increments = 2;
             break;
         case 0xC7: 
             // RST 0
-            do_interrupt(cpu, 0, &pc_increments);
+            do_interrupt(motherboard, cpu, 0, &pc_increments);
             break;
         case 0xC8: 
             // RET Z
-            do_conditional_return(cpu, cpu->zero_flag, num_states, &pc_increments);
+            do_conditional_return(motherboard, cpu, cpu->zero_flag, num_states, &pc_increments);
             break;
         case 0xC9: 
             // RET
-            do_conditional_return(cpu, true, num_states, &pc_increments);
+            do_conditional_return(motherboard, cpu, true, num_states, &pc_increments);
             // conditional returns take 11 states if the condition is true.  This is an unconditional return
             // which only takes 10.  I'll pull it from the table though, as the compiler should make this a static assignment anyway, 
             // and this way if the table updates later for a different CPU I don't need to remember to change this code.
@@ -1140,140 +1143,140 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0xCA:
             // JMP Z
-            do_conditional_jump(cpu, cpu->zero_flag, &pc_increments);
+            do_conditional_jump(motherboard, cpu, cpu->zero_flag, &pc_increments);
             break;
         case 0xCC: 
             // CALL Z addr
-            do_conditional_call(cpu, cpu->zero_flag, num_states, &pc_increments);
+            do_conditional_call(motherboard, cpu, cpu->zero_flag, num_states, &pc_increments);
             break;
         case 0xCD: 
             // CALL addr
             // this is an unconditional call, so pass in true for the flag
-            do_conditional_call(cpu, true, num_states, &pc_increments);
+            do_conditional_call(motherboard, cpu, true, num_states, &pc_increments);
             break;
         case 0xCE: 
             // ACI data (add immediate with carry);
-            do_addition(cpu, cpu->motherboard_memory[cpu->pc + 1], cpu->carry_flag);
+            do_addition(cpu, motherboard->memory[cpu->pc + 1], cpu->carry_flag);
             pc_increments = 2;
             break;
         case 0xCF: 
             // RST 1
-            do_interrupt(cpu, 1, &pc_increments);
+            do_interrupt(motherboard, cpu, 1, &pc_increments);
             break;
         case 0xD0: 
             // RET NC
-            do_conditional_return(cpu, !(cpu->carry_flag), num_states, &pc_increments);
+            do_conditional_return(motherboard, cpu, !(cpu->carry_flag), num_states, &pc_increments);
             break;
         case 0xD1:
             // POP DE
-            cpu->d = cpu->motherboard_memory[cpu->sp + 1];
-            cpu->e = cpu->motherboard_memory[cpu->sp];
+            cpu->d = motherboard->memory[cpu->sp + 1];
+            cpu->e = motherboard->memory[cpu->sp];
             cpu->sp = cpu->sp + 2;
             break;
         case 0xD2: 
             // JMP NC
-            do_conditional_jump(cpu, !(cpu->carry_flag), &pc_increments);
+            do_conditional_jump(motherboard, cpu, !(cpu->carry_flag), &pc_increments);
             break;
         case 0xD3: 
             // OUT port, A
-            if (!cpu->motherboard_output_handler(cpu->motherboard_memory[cpu->pc + 1], cpu->a)) {
+            if (!motherboard->output_handler(motherboard, motherboard->memory[cpu->pc + 1], cpu->a)) {
                 return false;
             }
             pc_increments = 2;
             break;
         case 0xD4: 
             // CALL NC addr
-            do_conditional_call(cpu, !(cpu->carry_flag), num_states, &pc_increments);
+            do_conditional_call(motherboard, cpu, !(cpu->carry_flag), num_states, &pc_increments);
             break;
         case 0xD5: 
             // PUSH DE
-            cpu->motherboard_memory[cpu->sp - 1] = cpu->d;
-            cpu->motherboard_memory[cpu->sp - 2] = cpu->e;
+            motherboard->memory[cpu->sp - 1] = cpu->d;
+            motherboard->memory[cpu->sp - 2] = cpu->e;
             cpu->sp = cpu->sp - 2;
             break;
         case 0xD6: 
             // SUI data
-            do_subtraction(cpu, cpu->motherboard_memory[cpu->pc + 1], false, true);
+            do_subtraction(cpu, motherboard->memory[cpu->pc + 1], false, true);
             pc_increments = 2;
             break;
         case 0xD7: 
             // RST 2
-            do_interrupt(cpu, 2, &pc_increments);
+            do_interrupt(motherboard, cpu, 2, &pc_increments);
             break;
         case 0xD8: 
             // RET C
-            do_conditional_return(cpu, cpu->carry_flag, num_states, &pc_increments);
+            do_conditional_return(motherboard, cpu, cpu->carry_flag, num_states, &pc_increments);
             break;
         case 0xDA:
             // JMP C
-            do_conditional_jump(cpu, cpu->carry_flag, &pc_increments);
+            do_conditional_jump(motherboard, cpu, cpu->carry_flag, &pc_increments);
             break;
         case 0xDB: 
             // IN A port
-            if (!cpu->motherboard_input_handler(cpu->motherboard_memory[cpu->pc + 1], &(cpu->a))) {
+            if (!motherboard->input_handler(motherboard, motherboard->memory[cpu->pc + 1], &(cpu->a))) {
                 return false;
             }
             pc_increments = 2;
             break;
         case 0xDC: 
             // CALL C addr
-            do_conditional_call(cpu, cpu->carry_flag, num_states, &pc_increments);
+            do_conditional_call(motherboard, cpu, cpu->carry_flag, num_states, &pc_increments);
             break;
         case 0xDE: 
             // SBI data (subtract intermediate with carry)
-            do_subtraction(cpu, cpu->motherboard_memory[cpu->pc + 1], cpu->carry_flag, true);
+            do_subtraction(cpu, motherboard->memory[cpu->pc + 1], cpu->carry_flag, true);
             pc_increments = 2;
             break;
         case 0xDF: 
             // RST 3
-            do_interrupt(cpu, 3, &pc_increments);
+            do_interrupt(motherboard, cpu, 3, &pc_increments);
             break;
         case 0xE0: 
             // RET PO
-            do_conditional_return(cpu, !(cpu->parity_flag), num_states, &pc_increments);
+            do_conditional_return(motherboard, cpu, !(cpu->parity_flag), num_states, &pc_increments);
             break;
         case 0xE1: // POP
             // POP HL
-            cpu->h = cpu->motherboard_memory[cpu->sp + 1];
-            cpu->l = cpu->motherboard_memory[cpu->sp];
+            cpu->h = motherboard->memory[cpu->sp + 1];
+            cpu->l = motherboard->memory[cpu->sp];
             cpu->sp = cpu->sp + 2;
             break;
         case 0xE2: 
             // JMP PO
-            do_conditional_jump(cpu, !(cpu->parity_flag), &pc_increments);
+            do_conditional_jump(motherboard, cpu, !(cpu->parity_flag), &pc_increments);
             break;
         case 0xE3: 
             // XTHL
             // Exchange stack top with H and L.
             tmp_h = cpu->h;
             tmp_l = cpu->l;
-            cpu->h = cpu->motherboard_memory[cpu->sp + 1];
-            cpu->l = cpu->motherboard_memory[cpu->sp];
-            cpu->motherboard_memory[cpu->sp] = tmp_l;
-            cpu->motherboard_memory[cpu->sp + 1] = tmp_h;
+            cpu->h = motherboard->memory[cpu->sp + 1];
+            cpu->l = motherboard->memory[cpu->sp];
+            motherboard->memory[cpu->sp] = tmp_l;
+            motherboard->memory[cpu->sp + 1] = tmp_h;
             break;
         case 0xE4: 
             // CALL PO addr
-            do_conditional_call(cpu, !(cpu->parity_flag), num_states, &pc_increments);
+            do_conditional_call(motherboard, cpu, !(cpu->parity_flag), num_states, &pc_increments);
             break;
         case 0xE5:
             // PUSH HL
-            cpu->motherboard_memory[cpu->sp - 1] = cpu->h;
-            cpu->motherboard_memory[cpu->sp - 2] = cpu->l;
+            motherboard->memory[cpu->sp - 1] = cpu->h;
+            motherboard->memory[cpu->sp - 2] = cpu->l;
             cpu->sp = cpu->sp - 2;
             break;
         case 0xE6: 
             // AND data (ANI data)
-            do_and(cpu, cpu->motherboard_memory[cpu->pc + 1]);
+            do_and(cpu, motherboard->memory[cpu->pc + 1]);
             pc_increments = 2;
             break;
         case 0xE7: 
             // RST 4
-            do_interrupt(cpu, 4, &pc_increments);
+            do_interrupt(motherboard, cpu, 4, &pc_increments);
             break;
         case 0xE8: 
             // RET PE
-            do_conditional_return(cpu, cpu->parity_flag, num_states, &pc_increments);
+            do_conditional_return(motherboard, cpu, cpu->parity_flag, num_states, &pc_increments);
             break;
         case 0xE9: 
             // PCHL - Jump to (HL) indirect 
@@ -1282,7 +1285,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0xEA:
             // JMP PE
-            do_conditional_jump(cpu, cpu->parity_flag, &pc_increments);
+            do_conditional_jump(motherboard, cpu, cpu->parity_flag, &pc_increments);
             break;
         case 0xEB: 
             // XCHG (a.k.a. EX DE, HL)
@@ -1295,56 +1298,56 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0xEC: 
             // CALL PE addr
-            do_conditional_call(cpu, cpu->parity_flag, num_states, &pc_increments);
+            do_conditional_call(motherboard, cpu, cpu->parity_flag, num_states, &pc_increments);
             break;
         case 0xEE: 
             // XRI data (XOR intermediate)
-            do_xor(cpu, cpu->motherboard_memory[cpu->pc + 1]);
+            do_xor(cpu, motherboard->memory[cpu->pc + 1]);
             pc_increments = 2;
             break;
         case 0xEF: 
             // RST 5
-            do_interrupt(cpu, 5, &pc_increments);
+            do_interrupt(motherboard, cpu, 5, &pc_increments);
             break;
         case 0xF0: 
             // RET P
-            do_conditional_return(cpu, !(cpu->sign_flag), num_states, &pc_increments);
+            do_conditional_return(motherboard, cpu, !(cpu->sign_flag), num_states, &pc_increments);
             break;
         case 0xF1: 
             // POP PSW (POP AF)
-            cpu->a = cpu->motherboard_memory[cpu->sp + 1];
-            set_flags_from_byte(cpu, cpu->motherboard_memory[cpu->sp]);
+            cpu->a = motherboard->memory[cpu->sp + 1];
+            set_flags_from_byte(cpu, motherboard->memory[cpu->sp]);
             cpu->sp = cpu->sp + 2;
             break;
         case 0xF2: 
             // JMP P
-            do_conditional_jump(cpu, !(cpu->sign_flag), &pc_increments);
+            do_conditional_jump(motherboard, cpu, !(cpu->sign_flag), &pc_increments);
             break;
         case 0xF3: // DI
             cpu->interrupts_enabled = false;
             break;
         case 0xF4: 
             // CALL P addr
-            do_conditional_call(cpu, !(cpu->sign_flag), num_states, &pc_increments);
+            do_conditional_call(motherboard, cpu, !(cpu->sign_flag), num_states, &pc_increments);
             break;
         case 0xF5:
             // PUSH PSW (a.k.a. PUSH AF)
-            cpu->motherboard_memory[cpu->sp - 1] = cpu->a;
-            cpu->motherboard_memory[cpu->sp - 2] = get_byte_from_flags(cpu);
+            motherboard->memory[cpu->sp - 1] = cpu->a;
+            motherboard->memory[cpu->sp - 2] = get_byte_from_flags(cpu);
             cpu->sp = cpu->sp - 2;
             break;
         case 0xF6: 
             // OR data (ORI data)
-            do_or(cpu, cpu->motherboard_memory[cpu->pc + 1]);
+            do_or(cpu, motherboard->memory[cpu->pc + 1]);
             pc_increments = 2;
             break;
         case 0xF7: 
             // RST 6
-            do_interrupt(cpu, 6, &pc_increments);
+            do_interrupt(motherboard, cpu, 6, &pc_increments);
             break;
         case 0xF8: 
             // RET M
-            do_conditional_return(cpu, cpu->sign_flag, num_states, &pc_increments);
+            do_conditional_return(motherboard, cpu, cpu->sign_flag, num_states, &pc_increments);
             break;
         case 0xF9: 
             // SPHL
@@ -1352,7 +1355,7 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0xFA:
             // JMP M
-            do_conditional_jump(cpu, cpu->sign_flag, &pc_increments);
+            do_conditional_jump(motherboard, cpu, cpu->sign_flag, &pc_increments);
             break;
         case 0xFB: 
             // EI
@@ -1360,16 +1363,16 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
             break;
         case 0xFC: 
             // CALL M addr
-            do_conditional_call(cpu, cpu->sign_flag, num_states, &pc_increments);
+            do_conditional_call(motherboard, cpu, cpu->sign_flag, num_states, &pc_increments);
             break;
         case 0xFE: 
             // CPI data (CMP data)
-            do_subtraction(cpu, cpu->motherboard_memory[cpu->pc + 1], false, false);
+            do_subtraction(cpu, motherboard->memory[cpu->pc + 1], false, false);
             pc_increments = 2;
             break;
         case 0xFF: 
             // RST 7
-            do_interrupt(cpu, 7, &pc_increments);
+            do_interrupt(motherboard, cpu, 7, &pc_increments);
             break;
         default:  // 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0xCB, 0xD9, 0xDD, 0xED, 0xFD
             printf("ERROR: Opcode %02X not valid\n", opcode); return (false); //(strbuff, "??");
@@ -1379,11 +1382,11 @@ bool do_opcode(cpu8080 *cpu, uint64_t *num_states) {
 }
 
 // cycle() returns false on error
-bool cycle_cpu8080(cpu8080 *cpu, uint64_t *num_states) {
+bool cycle_cpu8080(motherboard8080 *motherboard, cpu8080 *cpu, uint64_t *num_states) {
     bool flip_interrupts_on, retval;
     if (!(cpu->halted)){
         flip_interrupts_on = cpu->enable_interrupts_after_next_instruction;
-        retval = do_opcode(cpu, num_states);
+        retval = do_opcode(motherboard, cpu, num_states);
         if (flip_interrupts_on){
             cpu->interrupts_enabled = true;
             cpu->enable_interrupts_after_next_instruction = false;

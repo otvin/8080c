@@ -7,6 +7,6 @@
 #include "motherboard.h"
 
 void debug_dump_8080(cpu8080 cpu);
-bool debug_8080(motherboard8080 motherboard, uint64_t *total_states, uint64_t *total_instructions);
+bool debug_8080(motherboard8080 *motherboard, cpu8080 *cpu, uint64_t *total_states, uint64_t *total_instructions);
 
 #endif

@@ -7,9 +7,10 @@
 #include <stdbool.h>
 #include "memory.h"
 #include "disassembler.h"
+#include "cpu8080.h"
 #include "motherboard.h"
 #include "debugger.h"
-#include "cpu8080.h"
+
 
 /*
 Virtual computer to run 8080 Emulator tests.  Tests may be found at https://altairclone.com/downloads/cpu_tests/
@@ -35,6 +36,8 @@ int main(int argc, char *argv[]) {
     total_instructions = 0;
 
     motherboard8080 motherboard;
+    cpu8080 cpu;
+    init_test_cpu8080(&cpu);
     init_test_motherboard(&motherboard);
     
     load_cpm_shim(motherboard.memory);
@@ -50,17 +53,17 @@ int main(int argc, char *argv[]) {
     run = true;
 
     if (debug_mode) {
-        run = debug_8080(motherboard, &total_states, &total_instructions);
+        run = debug_8080(&motherboard, &cpu, &total_states, &total_instructions);
     }
 
-    while (run && (!motherboard.cpu.halted)) {
-        run = cycle_cpu8080(&(motherboard.cpu), &num_states);
+    while (run && (!cpu.halted)) {
+        run = cycle_cpu8080(&motherboard, &cpu, &num_states);
         if (run) {
             total_states = total_states + num_states;
             total_instructions++;
         }
         else {
-            debug_8080(motherboard, &total_states, &total_instructions);
+            debug_8080(&motherboard, &cpu, &total_states, &total_instructions);
             run = false;
         }
     }

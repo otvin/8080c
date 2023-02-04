@@ -137,7 +137,7 @@ bool parse_long(const char *str, long *val) {
 }
 
 // Returns true if execution should continue; false if execution should stop.
-bool debug_8080(motherboard8080 motherboard, uint64_t *total_states, uint64_t *total_instructions) {
+bool debug_8080(motherboard8080 *motherboard, cpu8080 *cpu, uint64_t *total_states, uint64_t *total_instructions) {
     int breakpoint_list[16] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     const int breakpoint_list_size = 16;
     char cmd_buffer[32], parsed_command0[32], parsed_command1[32], parsed_command2[32];
@@ -150,13 +150,13 @@ bool debug_8080(motherboard8080 motherboard, uint64_t *total_states, uint64_t *t
 
     while(running) {
         printf("\n");
-        debug_dump_8080(motherboard.cpu);
+        debug_dump_8080(*cpu);
         printf("\n");
         printf("Instructions: %ld\tStates: %ld\n\n", *total_instructions, *total_states);
         printf("Current +/- 10 bytes of instructions:\n");
-        start = (motherboard.cpu.pc >= 0xA) ? (motherboard.cpu.pc) - 10 : 0;
-        end = (motherboard.cpu.pc <= 0xFFF6) ? (motherboard.cpu.pc) + 10 : 0xFFFF;
-        disassemble(start, end, motherboard.cpu.pc, breakpoint_list, breakpoint_list_size, motherboard.memory);
+        start = (cpu->pc >= 0xA) ? (cpu->pc) - 10 : 0;
+        end = (cpu->pc <= 0xFFF6) ? (cpu->pc) + 10 : 0xFFFF;
+        disassemble(start, end, cpu->pc, breakpoint_list, breakpoint_list_size, motherboard->memory);
         printf("\n");
 
         printf("> ");
@@ -248,11 +248,11 @@ bool debug_8080(motherboard8080 motherboard, uint64_t *total_states, uint64_t *t
                 }
                 keep_running = true;
                 for (i = 0; ((instr_to_run == RUN_FOREVER || i < instr_to_run) && keep_running); i++) {
-                    keep_running = cycle_cpu8080(&(motherboard.cpu), &num_states);
+                    keep_running = cycle_cpu8080(motherboard, cpu, &num_states);
                     if (keep_running) {
                         (*total_states) = (*total_states) + num_states;
                         (*total_instructions) ++;
-                        if (is_breakpoint(breakpoint_list, motherboard.cpu.pc, breakpoint_list_size)) {
+                        if (is_breakpoint(breakpoint_list, cpu->pc, breakpoint_list_size)) {
                             keep_running = false;
                         }
                     }
@@ -273,7 +273,7 @@ bool debug_8080(motherboard8080 motherboard, uint64_t *total_states, uint64_t *t
                     }
                 }
                 for(i=0; i<hex2; i++){
-                    printf("%04X: 0x%02X\n", (uint16_t)hex1 + i, motherboard.memory[hex1 + i]);
+                    printf("%04X: 0x%02X\n", (uint16_t)hex1 + i, motherboard->memory[hex1 + i]);
                 }
             }
             else if (strcmp(parsed_command0, "set") == 0) {
@@ -293,14 +293,14 @@ bool debug_8080(motherboard8080 motherboard, uint64_t *total_states, uint64_t *t
                             printf("Invalid command %s\nsecond argument to set must be a valid 8-bit value.\n", cmd_buffer);
                         }
                         else {
-                            motherboard.memory[hex1] = (uint8_t)hex2;
+                            motherboard->memory[hex1] = (uint8_t)hex2;
                         }
                     }
                 }
             }
             else if (strcmp(parsed_command0, "b") == 0) {
                 if (strlen(parsed_command1) == 0) {
-                    set_breakpoint(breakpoint_list, motherboard.cpu.pc, breakpoint_list_size);
+                    set_breakpoint(breakpoint_list, cpu->pc, breakpoint_list_size);
                 }
                 else {
                     is_valid = parse_long(parsed_command1, &hex1);
@@ -316,14 +316,14 @@ bool debug_8080(motherboard8080 motherboard, uint64_t *total_states, uint64_t *t
                 print_breakpoints(breakpoint_list, breakpoint_list_size);
             }
             else if (strcmp(parsed_command0, "bt") == 0) {
-                if (motherboard.cpu.sp == motherboard.cpu.stack_pointer_start) {
+                if (cpu->sp == cpu->stack_pointer_start) {
                     printf("Stack empty\n\n");
                 }
                 else {
                     printf("Stack Addr & Value\n");
                     printf("------------------\n");
-                    for(i = motherboard.cpu.sp; i < motherboard.cpu.stack_pointer_start; i = i + 2) {
-                        printf("0x%04X\t0x%02X%02X\n", i, motherboard.memory[i+1], motherboard.memory[i]);
+                    for(i = cpu->sp; i < cpu->stack_pointer_start; i = i + 2) {
+                        printf("0x%04X\t0x%02X%02X\n", i, motherboard->memory[i+1], motherboard->memory[i]);
                     }
                     printf("\n");
                 }
