@@ -43,5 +43,6 @@ typedef struct {
 void init_cpu8080(cpu8080 *cpu);
 void init_test_cpu8080(cpu8080 *cpu);
 bool cycle_cpu8080(motherboard8080 *motherboard, cpu8080 *cpu, uint64_t *num_states);
+void do_interrupt(motherboard8080 *motherboard, cpu8080 *cpu, uint8_t interrupt, uint16_t *pc_increments);
 
 #endif

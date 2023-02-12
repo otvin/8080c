@@ -23,7 +23,7 @@ void display_help() {
     printf("     r           Run program until next breakpoint\n");
     printf("     rr          Exit debugger and return to normal execution\n");
     printf("     q           Terminate program and debugger\n");
-    //printf("     int N       Send interrupt N to the system\n");
+    printf("     int N       Send interrupt N to the system\n");
     printf("     x 0xM       display contents of memory address M\n");
     printf("     x 0xM N     display contents of N bytes of memory starting with address M\n");
     printf("     set 0xM 0xN set contents of memory address M with value N\n");
@@ -146,6 +146,8 @@ bool debug_8080(motherboard8080 *motherboard, cpu8080 *cpu, uint64_t *total_stat
     uint64_t num_states;
     long hex1, hex2;
     bool is_valid, keep_running, continue_on_return = true;
+    uint8_t interrupt;
+    uint16_t ignore;
     
 
     while(running) {
@@ -229,6 +231,16 @@ bool debug_8080(motherboard8080 *motherboard, cpu8080 *cpu, uint64_t *total_stat
             if (strcmp(parsed_command0, "?") == 0) {
                 display_help();
             }
+            else if (strcmp(parsed_command0, "int") == 0) {
+                is_valid = parse_long(parsed_command1, &hex1);
+                if (!is_valid) {
+                    printf("Invalid command %s\nInvalid interrupt %s\n", cmd_buffer, parsed_command1);
+                }
+                else {
+                    interrupt = (uint8_t) hex1;
+                    do_interrupt(motherboard, cpu, interrupt, &ignore);
+                }    
+            }
             else if (strlen(parsed_command0) == 0 || strcmp(parsed_command0, "s") == 0 || strcmp(parsed_command0, "r") == 0) {
                 if (strcmp(parsed_command0, "r") == 0) {
                     instr_to_run = RUN_FOREVER; 
@@ -236,7 +248,7 @@ bool debug_8080(motherboard8080 *motherboard, cpu8080 *cpu, uint64_t *total_stat
                 else if (strlen(parsed_command1) > 0) {
                     is_valid = parse_long(parsed_command1, &hex1);
                     if (!is_valid) {
-                        printf("Invalid commend %s\nInvalid number of instructions %s\n", cmd_buffer, parsed_command1);
+                        printf("Invalid command %s\nInvalid number of instructions %s\n", cmd_buffer, parsed_command1);
                         instr_to_run = 0;
                     }
                     else {

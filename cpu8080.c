@@ -90,13 +90,16 @@ void set_flags_from_byte(cpu8080 *cpu, uint8_t byte) {
     cpu->carry_flag = (bool) (byte & 0x01);
 }
 
-static inline void do_interrupt(motherboard8080 *motherboard, cpu8080 *cpu, uint8_t interrupt, uint16_t *pc_increments) {
-    motherboard->memory[cpu->sp - 1] = ((cpu->pc + 3) >> 8);
-    motherboard->memory[cpu->sp - 2] = ((cpu->pc + 3) & 0xFF);
-    cpu->sp = cpu ->sp - 2;
-    // pc gets set to 8 * the interrupt number, which is interrupt << 3.
-    cpu->pc = (interrupt << 3);
-    (*pc_increments) = 0;
+void do_interrupt(motherboard8080 *motherboard, cpu8080 *cpu, uint8_t interrupt, uint16_t *pc_increments) {
+    if (cpu->interrupts_enabled) {
+        cpu->interrupts_enabled = false;
+        motherboard->memory[cpu->sp - 1] = ((cpu->pc) >> 8);
+        motherboard->memory[cpu->sp - 2] = ((cpu->pc) & 0xFF);
+        cpu->sp = cpu ->sp - 2;
+        // pc gets set to 8 * the interrupt number, which is interrupt << 3.
+        cpu->pc = (interrupt << 3);
+        (*pc_increments) = 0;
+    }
 }
 
 static inline void do_conditional_call(motherboard8080 *motherboard, cpu8080 *cpu, bool flag, uint64_t *num_states, uint16_t *pc_increments) {
