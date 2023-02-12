@@ -78,6 +78,9 @@ int main(int argc, char *argv[]) {
                             motherboard.player_one_fire_pressed = true;
                             motherboard.player_two_fire_pressed = true;
                             break;
+                        case SDLK_ESCAPE:
+                            debug_8080((motherboard8080 *) &motherboard, &cpu, &total_states, &total_instructions);
+                            break;
                     }
                     break;
                 case SDL_KEYUP:
