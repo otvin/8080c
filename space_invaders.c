@@ -51,10 +51,8 @@ int main(int argc, char *argv[]) {
     while (run && (!cpu.halted)) {
         
         while (SDL_PollEvent(&event)) {
-        //    printf("got an event\n");
             switch(event.type) {
                 case SDL_QUIT:
-                    printf("Quit");
                     run = false;
                     break;
                 case SDL_KEYDOWN:
@@ -122,12 +120,10 @@ int main(int argc, char *argv[]) {
                 debug_8080((motherboard8080 *) &motherboard, &cpu, &total_states, &total_instructions);
             }
         }
-        printf("a\n");
         if (run) {
             // first interrupt
             do_interrupt((motherboard8080 *) &motherboard, &cpu, 1, &ignore);
         }
-        printf("b\n");
         while (run && cur_states <= 33333) {
             run = cycle_cpu8080((motherboard8080 *) &motherboard, &cpu, &num_states);
             if (run) {
@@ -139,12 +135,10 @@ int main(int argc, char *argv[]) {
                 debug_8080((motherboard8080 *) &motherboard, &cpu, &total_states, &total_instructions);
             }
         }
-        printf("c\n");
         if (run) {
             // second interrupt
             do_interrupt((motherboard8080 *) &motherboard, &cpu, 2, &ignore);
         }
-        printf("d\n");
         spaceinvaders_screen_draw(&motherboard);
 
         // insert loop here to delay
